@@ -1,0 +1,2 @@
+-- Optional development data. Run after signing in as the master user.
+-- The application already includes in-browser demo content when Supabase is not configured.
