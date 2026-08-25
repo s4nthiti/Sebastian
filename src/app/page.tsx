@@ -3,6 +3,7 @@ import { SignIn } from "@/components/sign-in";
 import { AccessPending } from "@/components/access-pending";
 import { isSupabaseConfigured } from "@/lib/supabase/config";
 import { createClient } from "@/lib/supabase/server";
+import { calendarEventFromRow } from "@/lib/calendar";
 import { relatedName } from "@/lib/utils";
 
 export default async function HomePage() {
@@ -21,12 +22,19 @@ export default async function HomePage() {
     .maybeSingle();
   if (!membership) return <AccessPending email={String(data.claims.email ?? "this account")} />;
 
-  const { data: rows } = await supabase
-    .from("transactions")
-    .select("id,title,type,amount,occurred_on,categories(name)")
-    .eq("household_id", membership.household_id)
-    .order("occurred_on", { ascending: false })
-    .limit(30);
+  const [{ data: rows }, { data: calendarRows }] = await Promise.all([
+    supabase
+      .from("transactions")
+      .select("id,title,type,amount,occurred_on,categories(name)")
+      .eq("household_id", membership.household_id)
+      .order("occurred_on", { ascending: false })
+      .limit(30),
+    supabase
+      .from("calendar_events")
+      .select("id,title,description,starts_at,recurrence_rule,item_type")
+      .eq("household_id", membership.household_id)
+      .order("starts_at", { ascending: true }),
+  ]);
   const initialTransactions = (rows ?? []).map((row) => ({
     id: row.id,
     title: row.title,
@@ -35,6 +43,7 @@ export default async function HomePage() {
     amount: row.type === "income" ? Number(row.amount) : -Number(row.amount),
     icon: row.type === "income" ? "wallet" : "basket",
   }));
+  const initialCalendarEvents = (calendarRows ?? []).map(calendarEventFromRow);
 
-  return <SebastianApp demoMode={false} householdId={membership.household_id} userId={userId} initialTransactions={initialTransactions} />;
+  return <SebastianApp demoMode={false} householdId={membership.household_id} userId={userId} initialTransactions={initialTransactions} initialCalendarEvents={initialCalendarEvents} />;
 }

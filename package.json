@@ -10,6 +10,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@daypicker/react": "^10.0.1",
+    "@fontsource/kanit": "latest",
     "@radix-ui/react-avatar": "latest",
     "@radix-ui/react-dialog": "latest",
     "@radix-ui/react-dropdown-menu": "latest",
@@ -19,8 +21,6 @@
     "@radix-ui/react-switch": "latest",
     "@radix-ui/react-tabs": "latest",
     "@radix-ui/react-tooltip": "latest",
-    "@fontsource-variable/manrope": "latest",
-    "@fontsource/ibm-plex-sans-thai": "latest",
     "@supabase/ssr": "latest",
     "@supabase/supabase-js": "latest",
     "class-variance-authority": "latest",
@@ -41,6 +41,7 @@
     "@types/react-dom": "latest",
     "eslint": "^9.39.1",
     "eslint-config-next": "latest",
+    "supabase": "^2.115.0",
     "tailwindcss": "latest",
     "typescript": "^5.9.3"
   },

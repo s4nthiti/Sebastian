@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
 import { Providers } from "@/components/providers";
-import "@fontsource-variable/manrope";
-import "@fontsource/ibm-plex-sans-thai/400.css";
-import "@fontsource/ibm-plex-sans-thai/500.css";
-import "@fontsource/ibm-plex-sans-thai/600.css";
-import "@fontsource/ibm-plex-sans-thai/700.css";
+import "@fontsource/kanit/400.css";
+import "@fontsource/kanit/500.css";
+import "@fontsource/kanit/600.css";
+import "@fontsource/kanit/700.css";
+import "@daypicker/react/style.css";
 import "./globals.css";
 
 export const metadata: Metadata = {

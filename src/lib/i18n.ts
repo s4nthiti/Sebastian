@@ -5,7 +5,7 @@ export const copy = {
     greeting: "Good evening",
     subtitle: "Here’s everything that needs your attention at home.",
     overview: "Overview",
-    finances: "Money",
+    finances: "Financial",
     calendar: "Calendar",
     recipes: "Recipes",
     household: "Household",
