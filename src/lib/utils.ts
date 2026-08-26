@@ -33,3 +33,13 @@ export function relatedName(value: unknown, fallback = "Other") {
   }
   return fallback;
 }
+
+export function relatedProfile(value: unknown) {
+  const profile = Array.isArray(value) ? value[0] : value;
+  if (!profile || typeof profile !== "object") return { displayName: "", email: "" };
+  const record = profile as { display_name?: unknown; email?: unknown };
+  return {
+    displayName: typeof record.display_name === "string" ? record.display_name : "",
+    email: typeof record.email === "string" ? record.email : "",
+  };
+}

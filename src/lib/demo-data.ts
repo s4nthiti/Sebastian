@@ -27,11 +27,12 @@ export const spendingData = whenDemoDataEnabled([
 ]);
 
 export const categories = whenDemoDataEnabled([
-  { name: "Food & dining", value: 12480, color: "#ff7b54" },
-  { name: "Home", value: 10200, color: "#3a7d6f" },
-  { name: "Transport", value: 7200, color: "#e7b25b" },
-  { name: "Subscriptions", value: 3800, color: "#8a78c2" },
-  { name: "Other", value: 9000, color: "#aeb7b4" },
+  { id: "category-groceries", name: "Groceries", nameTh: "ของใช้และอาหาร", color: "#ff7b54" },
+  { id: "category-home", name: "Home", nameTh: "บ้าน", color: "#3a7d6f" },
+  { id: "category-transport", name: "Transport", nameTh: "เดินทาง", color: "#e7b25b" },
+  { id: "category-subscriptions", name: "Subscriptions", nameTh: "สมาชิกบริการ", color: "#8a78c2" },
+  { id: "category-income", name: "Income", nameTh: "รายรับ", color: "#4f8ec9" },
+  { id: "category-other", name: "Other", nameTh: "อื่น ๆ", color: "#aeb7b4" },
 ]);
 
 export const transactions = whenDemoDataEnabled([
@@ -146,6 +147,12 @@ export const recipes = whenDemoDataEnabled([
 ]);
 
 export const debts = whenDemoDataEnabled([
-  { name: "Home renovation", paid: 180000, total: 300000, next: "฿15,000 · 1 Sep" },
-  { name: "MacBook Pro", paid: 52900, total: 79900, next: "฿4,500 · 8 Sep" },
+  { id: "debt-renovation", name: "Home renovation", paid: 180000, total: 300000, installment: 15000, dueDate: "2026-09-01" },
+  { id: "debt-macbook", name: "MacBook Pro", paid: 52900, total: 79900, installment: 4500, dueDate: "2026-09-08" },
+]);
+
+export const scheduledPayments = whenDemoDataEnabled([
+  { id: "payment-insurance", title: "Home insurance", amount: 8400, dueDate: "2026-08-25" },
+  { id: "payment-internet", title: "Home internet", amount: 3000, dueDate: "2026-08-27" },
+  { id: "payment-water", title: "Water service", amount: 1500, dueDate: "2026-08-28" },
 ]);
