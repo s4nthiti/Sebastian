@@ -27,6 +27,7 @@ export const spendingData = whenDemoDataEnabled([
 ]);
 
 export const categories = whenDemoDataEnabled([
+  { id: "category-savings", name: "Savings", nameTh: "เงินออม", color: "#3a7d6f", isSystem: true },
   { id: "category-groceries", name: "Groceries", nameTh: "ของใช้และอาหาร", color: "#ff7b54" },
   { id: "category-home", name: "Home", nameTh: "บ้าน", color: "#3a7d6f" },
   { id: "category-transport", name: "Transport", nameTh: "เดินทาง", color: "#e7b25b" },
@@ -36,6 +37,8 @@ export const categories = whenDemoDataEnabled([
 ]);
 
 export const transactions = whenDemoDataEnabled([
+  { id: "savings-opening-emergency", title: "Opening balance: Emergency fund", category: "Savings", date: "2026-08-01", amount: -85000, icon: "piggy-bank", savingsGoalId: "savings-emergency" },
+  { id: "savings-opening-holiday", title: "Opening balance: Family holiday", category: "Savings", date: "2026-08-01", amount: -24000, icon: "piggy-bank", savingsGoalId: "savings-holiday" },
   { id: "1", title: "Villa Market", category: "Groceries", date: "Today, 18:42", amount: -1840, icon: "basket" },
   { id: "2", title: "Salary", category: "Income", date: "Today, 09:00", amount: 98000, icon: "wallet" },
   { id: "3", title: "MEA electricity", category: "Utilities", date: "23 Aug", amount: -2180, icon: "zap" },
@@ -116,39 +119,140 @@ export const calendarEvents = whenDemoDataEnabled([
   },
 ]);
 
-export const recipes = whenDemoDataEnabled([
+export type RecipeCategory = "food" | "dessert" | "beverage";
+export type RecipeDifficulty = "easy" | "medium" | "hard";
+export type Recipe = {
+  id: string;
+  title: string;
+  titleTh?: string;
+  description?: string;
+  image?: string;
+  prepMinutes: number;
+  cookMinutes: number;
+  servings?: number;
+  difficulty: RecipeDifficulty;
+  category: RecipeCategory;
+  tags: string[];
+  ingredients: string[];
+};
+
+const recipeCategories = new Set<RecipeCategory>(["food", "dessert", "beverage"]);
+
+export function recipeFromRow(row: {
+  id: string;
+  title: string;
+  title_th: string | null;
+  description: string | null;
+  image_path: string | null;
+  prep_minutes: number | null;
+  cook_minutes: number | null;
+  servings: number | null;
+  difficulty: string | null;
+  tags: string[] | null;
+  ingredients: unknown;
+}): Recipe {
+  const tags = row.tags ?? [];
+  const storedCategory = tags.find((tag): tag is RecipeCategory => recipeCategories.has(tag.toLowerCase() as RecipeCategory));
+  const difficulty = row.difficulty === "medium" || row.difficulty === "hard" ? row.difficulty : "easy";
+  return {
+    id: row.id,
+    title: row.title,
+    titleTh: row.title_th ?? undefined,
+    description: row.description ?? undefined,
+    image: row.image_path ?? undefined,
+    prepMinutes: row.prep_minutes ?? 0,
+    cookMinutes: row.cook_minutes ?? 0,
+    servings: row.servings ?? undefined,
+    difficulty,
+    category: storedCategory ?? "food",
+    tags: tags.filter((tag) => !recipeCategories.has(tag.toLowerCase() as RecipeCategory)),
+    ingredients: Array.isArray(row.ingredients)
+      ? row.ingredients.filter((ingredient): ingredient is string => typeof ingredient === "string" && ingredient.trim().length > 0)
+      : [],
+  };
+}
+
+export const recipes: Recipe[] = whenDemoDataEnabled([
   {
     id: "1",
     title: "Thai green curry",
-    thai: "แกงเขียวหวานไก่",
-    time: "45 min",
-    difficulty: "Easy",
+    titleTh: "แกงเขียวหวานไก่",
+    description: "A fragrant coconut curry with chicken, Thai basil, and crisp vegetables.",
+    prepMinutes: 15,
+    cookMinutes: 30,
+    servings: 4,
+    difficulty: "easy",
+    category: "food",
     tags: ["Thai", "Dinner"],
+    ingredients: ["400 g chicken", "400 ml coconut milk", "2 tbsp green curry paste", "1 handful Thai basil"],
     image: "https://images.unsplash.com/photo-1455619452474-d2be8b1e70cd?auto=format&fit=crop&w=1200&q=80",
   },
   {
     id: "2",
     title: "Salmon rice bowl",
-    thai: "ข้าวหน้าปลาแซลมอน",
-    time: "30 min",
-    difficulty: "Easy",
+    titleTh: "ข้าวหน้าปลาแซลมอน",
+    description: "Glazed salmon, steamed rice, cucumber, and a quick sesame dressing.",
+    prepMinutes: 10,
+    cookMinutes: 20,
+    servings: 2,
+    difficulty: "easy",
+    category: "food",
     tags: ["Japanese", "Healthy"],
+    ingredients: ["2 salmon fillets", "2 cups cooked rice", "1 cucumber", "2 tbsp sesame dressing"],
     image: "https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=1200&q=80",
   },
   {
     id: "3",
     title: "Mushroom pasta",
-    thai: "พาสต้าเห็ดครีมซอส",
-    time: "35 min",
-    difficulty: "Medium",
+    titleTh: "พาสต้าเห็ดครีมซอส",
+    description: "Silky cream sauce, golden mushrooms, and parmesan tossed with pasta.",
+    prepMinutes: 10,
+    cookMinutes: 25,
+    servings: 3,
+    difficulty: "medium",
+    category: "food",
     tags: ["Italian", "Vegetarian"],
+    ingredients: ["250 g pasta", "250 g mushrooms", "200 ml cream", "50 g parmesan"],
     image: "https://images.unsplash.com/photo-1473093295043-cdd812d0e601?auto=format&fit=crop&w=1200&q=80",
+  },
+  {
+    id: "4",
+    title: "Mango sticky rice",
+    titleTh: "ข้าวเหนียวมะม่วง",
+    description: "Sweet coconut sticky rice served with ripe mango and toasted mung beans.",
+    prepMinutes: 20,
+    cookMinutes: 35,
+    servings: 4,
+    difficulty: "medium",
+    category: "dessert",
+    tags: ["Thai", "Coconut"],
+    ingredients: ["2 cups sticky rice", "2 ripe mangoes", "400 ml coconut milk", "3 tbsp sugar"],
+    image: "https://images.unsplash.com/photo-1559847844-5315695dadae?auto=format&fit=crop&w=1200&q=80",
+  },
+  {
+    id: "5",
+    title: "Thai iced tea",
+    titleTh: "ชาไทยเย็น",
+    description: "Strong spiced tea softened with milk and poured over plenty of ice.",
+    prepMinutes: 5,
+    cookMinutes: 10,
+    servings: 2,
+    difficulty: "easy",
+    category: "beverage",
+    tags: ["Thai", "Cold"],
+    ingredients: ["4 tbsp Thai tea mix", "500 ml water", "120 ml milk", "Ice"],
+    image: "https://images.unsplash.com/photo-1556679343-c7306c1976bc?auto=format&fit=crop&w=1200&q=80",
   },
 ]);
 
 export const debts = whenDemoDataEnabled([
-  { id: "debt-renovation", name: "Home renovation", paid: 180000, total: 300000, installment: 15000, dueDate: "2026-09-01" },
-  { id: "debt-macbook", name: "MacBook Pro", paid: 52900, total: 79900, installment: 4500, dueDate: "2026-09-08" },
+  { id: "debt-renovation", name: "Home renovation", paid: 180000, total: 300000, installment: 15000, totalMonths: 20, paidMonths: 12, dueDay: 1, dueDate: "2026-09-01" },
+  { id: "debt-macbook", name: "MacBook Pro", paid: 53266.67, total: 79900, installment: 4438.89, totalMonths: 18, paidMonths: 12, dueDay: 8, dueDate: "2026-09-08" },
+]);
+
+export const savingsGoals = whenDemoDataEnabled([
+  { id: "savings-emergency", name: "Emergency fund", current: 85000, target: 180000, targetDate: "2026-12-31" },
+  { id: "savings-holiday", name: "Family holiday", current: 24000, target: 60000, targetDate: "2026-11-15" },
 ]);
 
 export const scheduledPayments = whenDemoDataEnabled([

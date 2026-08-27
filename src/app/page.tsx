@@ -5,6 +5,7 @@ import { isSupabaseConfigured } from "@/lib/supabase/config";
 import { createClient } from "@/lib/supabase/server";
 import { calendarEventFromRow } from "@/lib/calendar";
 import { relatedName, relatedProfile } from "@/lib/utils";
+import { recipeFromRow } from "@/lib/demo-data";
 
 export default async function HomePage() {
   if (!isSupabaseConfigured()) return <SebastianApp demoMode />;
@@ -22,7 +23,7 @@ export default async function HomePage() {
     .maybeSingle();
   if (!membership) return <AccessPending email={String(data.claims.email ?? "this account")} />;
 
-  const [{ data: profileRow }, { data: rows }, { data: calendarRows }, { data: categoryRows }, { data: debtRows }, { data: memberRows }, { data: invitationRows }, { data: activityRows }] = await Promise.all([
+  const [{ data: profileRow }, { data: rows }, { data: calendarRows }, { data: categoryRows }, { data: debtRows }, { data: savingsRows }, { data: recipeRows }, { data: memberRows }, { data: invitationRows }, { data: activityRows }] = await Promise.all([
     supabase
       .from("profiles")
       .select("display_name,email,avatar_url")
@@ -30,7 +31,7 @@ export default async function HomePage() {
       .maybeSingle(),
     supabase
       .from("transactions")
-      .select("id,title,type,amount,occurred_on,categories(name)")
+      .select("id,title,type,amount,occurred_on,savings_goal_id,categories(name)")
       .eq("household_id", membership.household_id)
       .order("occurred_on", { ascending: false }),
     supabase
@@ -40,16 +41,26 @@ export default async function HomePage() {
       .order("starts_at", { ascending: true }),
     supabase
       .from("categories")
-      .select("id,name,name_th,color")
+      .select("id,name,name_th,color,is_system")
       .eq("household_id", membership.household_id)
       .is("deleted_at", null)
       .order("name", { ascending: true }),
     supabase
       .from("debt_installments")
-      .select("id,title,original_amount,remaining_amount,installment_amount,next_due_date")
+      .select("id,title,original_amount,remaining_amount,installment_amount,total_installments,paid_installments,due_day,next_due_date")
       .eq("household_id", membership.household_id)
       .eq("status", "active")
       .order("next_due_date", { ascending: true }),
+    supabase
+      .from("savings_goals")
+      .select("id,name,target_amount,current_amount,target_date")
+      .eq("household_id", membership.household_id)
+      .order("target_date", { ascending: true }),
+    supabase
+      .from("recipes")
+      .select("id,title,title_th,description,image_path,prep_minutes,cook_minutes,servings,difficulty,tags,ingredients")
+      .eq("household_id", membership.household_id)
+      .order("created_at", { ascending: false }),
     supabase
       .from("household_members")
       .select("user_id,role,joined_at,profiles!household_members_user_id_fkey(display_name,email)")
@@ -75,7 +86,8 @@ export default async function HomePage() {
     category: relatedName(row.categories),
     date: row.occurred_on,
     amount: row.type === "income" ? Number(row.amount) : -Number(row.amount),
-    icon: row.type === "income" ? "wallet" : "basket",
+    icon: row.savings_goal_id ? "piggy-bank" : row.type === "income" ? "wallet" : "basket",
+    savingsGoalId: row.savings_goal_id ?? undefined,
   }));
   const initialCalendarEvents = (calendarRows ?? []).map(calendarEventFromRow);
   const initialCategories = (categoryRows ?? []).map((category) => ({
@@ -83,6 +95,7 @@ export default async function HomePage() {
     name: category.name,
     nameTh: category.name_th ?? "",
     color: category.color,
+    isSystem: category.is_system,
   }));
   const initialDebts = (debtRows ?? []).flatMap((debt) => debt.next_due_date ? [{
     id: debt.id,
@@ -90,8 +103,19 @@ export default async function HomePage() {
     paid: Math.max(Number(debt.original_amount) - Number(debt.remaining_amount), 0),
     total: Number(debt.original_amount),
     installment: Number(debt.installment_amount),
+    totalMonths: Number(debt.total_installments),
+    paidMonths: Number(debt.paid_installments),
+    dueDay: Number(debt.due_day),
     dueDate: debt.next_due_date,
   }] : []);
+  const initialSavings = (savingsRows ?? []).map((goal) => ({
+    id: goal.id,
+    name: goal.name,
+    current: Number(goal.current_amount),
+    target: Number(goal.target_amount),
+    targetDate: goal.target_date ?? undefined,
+  }));
+  const initialRecipes = (recipeRows ?? []).map(recipeFromRow);
   const initialMembers = (memberRows ?? []).map((member) => {
     const profile = relatedProfile(member.profiles);
     return { userId: member.user_id, name: profile.displayName, email: profile.email, role: member.role, joinedAt: member.joined_at };
@@ -108,5 +132,5 @@ export default async function HomePage() {
     avatarUrl: profileRow?.avatar_url ?? undefined,
   };
 
-  return <SebastianApp demoMode={false} householdId={membership.household_id} userId={userId} initialProfile={initialProfile} initialTransactions={initialTransactions} initialCalendarEvents={initialCalendarEvents} initialCategories={initialCategories} initialDebts={initialDebts} initialMembers={initialMembers} initialInvitations={initialInvitations} initialActivities={initialActivities} />;
+  return <SebastianApp demoMode={false} householdId={membership.household_id} userId={userId} initialProfile={initialProfile} initialTransactions={initialTransactions} initialCalendarEvents={initialCalendarEvents} initialCategories={initialCategories} initialDebts={initialDebts} initialSavings={initialSavings} initialRecipes={initialRecipes} initialMembers={initialMembers} initialInvitations={initialInvitations} initialActivities={initialActivities} />;
 }

@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 
-const realtimeTables = ["transactions", "debt_installments", "calendar_events", "recipes", "meal_plans"];
+const realtimeTables = ["transactions", "debt_installments", "savings_goals", "calendar_events", "recipes", "meal_plans"];
 
 export function useHouseholdRealtime(enabled: boolean, onChange: () => void) {
   useEffect(() => {
