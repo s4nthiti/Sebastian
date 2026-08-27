@@ -886,7 +886,7 @@ function RecipeDetailsDialog({ recipe, locale, onOpenChange, onEdit, onDelete }:
           <div className="recipe-details-grid">
             <section>
               <h3>{locale === "th" ? "วัตถุดิบ" : "Ingredients"}</h3>
-              {recipe.ingredients.length > 0 ? <ul>{recipe.ingredients.map((ingredient) => <li key={ingredient}>{ingredient}</li>)}</ul> : <p className="recipe-details-empty">{locale === "th" ? "ยังไม่ได้เพิ่มวัตถุดิบ" : "No ingredients were added."}</p>}
+              {recipe.ingredients.length > 0 ? <ul>{recipe.ingredients.map((ingredient, index) => <li key={`${ingredient.name}-${ingredient.unit ?? ""}-${index}`}><span>{ingredient.name}</span>{ingredient.unit ? <strong>{ingredient.unit}</strong> : null}</li>)}</ul> : <p className="recipe-details-empty">{locale === "th" ? "ยังไม่ได้เพิ่มวัตถุดิบ" : "No ingredients were added."}</p>}
             </section>
             <section>
               <h3>{locale === "th" ? "วิธีทำอาหาร" : "Cooking method"}</h3>
@@ -907,7 +907,7 @@ function RecipesView({ locale, items, onEdit, onDelete }: { locale: Locale; item
   const visibleRecipes = useMemo(() => items.filter((recipe) => {
     if (activeFilter !== "all" && recipe.category !== activeFilter) return false;
     if (!normalizedQuery) return true;
-    return [recipe.title, recipe.titleTh, recipe.description, ...recipe.tags, ...recipe.ingredients]
+    return [recipe.title, recipe.titleTh, recipe.description, ...recipe.tags, ...recipe.ingredients.flatMap((ingredient) => [ingredient.name, ingredient.unit])]
       .filter(Boolean)
       .some((value) => value!.toLocaleLowerCase(locale === "th" ? "th" : "en").includes(normalizedQuery));
   }), [activeFilter, items, locale, normalizedQuery]);
@@ -960,7 +960,7 @@ function RecipeDialog({ open, onOpenChange, locale, recipe, onSave }: { open: bo
   const [removeExistingImage, setRemoveExistingImage] = useState(false);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const imagePreviewUrlRef = useRef<string | undefined>(undefined);
-  const [ingredientRows, setIngredientRows] = useState(() => recipe?.ingredients.length ? recipe.ingredients.map((value, index) => ({ id: `ingredient-${index}`, value })) : [{ id: "ingredient-0", value: "" }]);
+  const [ingredientRows, setIngredientRows] = useState(() => recipe?.ingredients.length ? recipe.ingredients.map((ingredient, index) => ({ id: `ingredient-${index}`, name: ingredient.name, unit: ingredient.unit ?? "" })) : [{ id: "ingredient-0", name: "", unit: "" }]);
 
   useEffect(() => () => {
     if (imagePreviewUrlRef.current) URL.revokeObjectURL(imagePreviewUrlRef.current);
@@ -994,7 +994,13 @@ function RecipeDialog({ open, onOpenChange, locale, recipe, onSave }: { open: bo
   async function submit(formData: FormData) {
     try {
       const tags = String(formData.get("tags") ?? "").split(",").map((tag) => tag.trim()).filter(Boolean);
-      const ingredients = formData.getAll("ingredients").map((ingredient) => String(ingredient).trim()).filter(Boolean);
+      const ingredientNames = formData.getAll("ingredientNames");
+      const ingredientUnits = formData.getAll("ingredientUnits");
+      const ingredients = ingredientNames.flatMap((value, index) => {
+        const name = String(value).trim();
+        const unit = String(ingredientUnits[index] ?? "").trim();
+        return name ? [{ name, unit: unit || undefined }] : [];
+      });
       await run(async () => {
         await onSave({
           title: String(formData.get("title") ?? "").trim(),
@@ -1008,7 +1014,7 @@ function RecipeDialog({ open, onOpenChange, locale, recipe, onSave }: { open: bo
           tags: [...new Set(tags)],
           imageFile: selectedImage,
           removeImage: removeExistingImage,
-          ingredients: [...new Set(ingredients)],
+          ingredients,
         });
         onOpenChange(false);
       });
@@ -1045,9 +1051,14 @@ function RecipeDialog({ open, onOpenChange, locale, recipe, onSave }: { open: bo
               </div>
             </div>
             <div className="field full recipe-ingredients-field">
-              <div className="recipe-field-heading"><span id="recipe-ingredients-label">{locale === "th" ? "วัตถุดิบ" : "Ingredients"}</span><button type="button" className="text-button" onClick={() => setIngredientRows((rows) => [...rows, { id: crypto.randomUUID(), value: "" }])}><Plus size={13} />{locale === "th" ? "เพิ่มวัตถุดิบ" : "Add ingredient"}</button></div>
+              <div className="recipe-field-heading"><span id="recipe-ingredients-label">{locale === "th" ? "วัตถุดิบ" : "Ingredients"}</span><button type="button" className="text-button" onClick={() => setIngredientRows((rows) => [...rows, { id: crypto.randomUUID(), name: "", unit: "" }])}><Plus size={13} />{locale === "th" ? "เพิ่มวัตถุดิบ" : "Add ingredient"}</button></div>
               <div className="recipe-ingredient-list" role="group" aria-labelledby="recipe-ingredients-label">
-                {ingredientRows.map((row, index) => <div className="recipe-ingredient-row" key={row.id}><input name="ingredients" type="text" required={index === 0} autoComplete="off" defaultValue={row.value} aria-label={`${locale === "th" ? "วัตถุดิบ" : "Ingredient"} ${index + 1}`} placeholder={locale === "th" ? "เช่น อกไก่ 400 กรัม" : "e.g. 400 g chicken breast"} /><button type="button" className="recipe-remove-ingredient" aria-label={locale === "th" ? `ลบวัตถุดิบ ${index + 1}` : `Remove ingredient ${index + 1}`} disabled={ingredientRows.length === 1} onClick={() => setIngredientRows((rows) => rows.filter((item) => item.id !== row.id))}><Trash2 size={15} /></button></div>)}
+                <div className="recipe-ingredient-columns" aria-hidden="true"><span>{locale === "th" ? "วัตถุดิบ" : "Ingredient"}</span><span>{locale === "th" ? "หน่วย / ปริมาณ (ไม่บังคับ)" : "Unit / amount (optional)"}</span><span /></div>
+                {ingredientRows.map((row, index) => <div className="recipe-ingredient-row" key={row.id}>
+                  <input name="ingredientNames" type="text" required={index === 0} autoComplete="off" defaultValue={row.name} aria-label={`${locale === "th" ? "วัตถุดิบ" : "Ingredient"} ${index + 1}`} placeholder={locale === "th" ? "เช่น อกไก่" : "e.g. Chicken breast"} />
+                  <input name="ingredientUnits" type="text" autoComplete="off" defaultValue={row.unit} aria-label={`${locale === "th" ? "หน่วยหรือปริมาณ" : "Unit or amount"} ${index + 1}`} placeholder={locale === "th" ? "เช่น 400 กรัม" : "e.g. 400 g"} />
+                  <button type="button" className="recipe-remove-ingredient" aria-label={locale === "th" ? `ลบวัตถุดิบ ${index + 1}` : `Remove ingredient ${index + 1}`} disabled={ingredientRows.length === 1} onClick={() => setIngredientRows((rows) => rows.filter((item) => item.id !== row.id))}><Trash2 size={15} /></button>
+                </div>)}
               </div>
             </div>
             <div className="field full"><label htmlFor="recipe-description">{locale === "th" ? "วิธีทำอาหาร" : "Cooking methods"} <span className="field-optional">({locale === "th" ? "ไม่บังคับ" : "optional"})</span></label><textarea id="recipe-description" name="description" defaultValue={recipe?.description} placeholder={locale === "th" ? "อธิบายขั้นตอนการเตรียมและปรุงอาหาร…" : "Describe how to prepare and cook this recipe…"} /></div>

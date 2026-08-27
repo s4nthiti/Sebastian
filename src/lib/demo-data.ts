@@ -121,6 +121,7 @@ export const calendarEvents = whenDemoDataEnabled([
 
 export type RecipeCategory = "food" | "dessert" | "beverage";
 export type RecipeDifficulty = "easy" | "medium" | "hard";
+export type RecipeIngredient = { name: string; unit?: string };
 export type Recipe = {
   id: string;
   title: string;
@@ -133,7 +134,7 @@ export type Recipe = {
   difficulty: RecipeDifficulty;
   category: RecipeCategory;
   tags: string[];
-  ingredients: string[];
+  ingredients: RecipeIngredient[];
 };
 
 const recipeCategories = new Set<RecipeCategory>(["food", "dessert", "beverage"]);
@@ -166,9 +167,14 @@ export function recipeFromRow(row: {
     difficulty,
     category: storedCategory ?? "food",
     tags: tags.filter((tag) => !recipeCategories.has(tag.toLowerCase() as RecipeCategory)),
-    ingredients: Array.isArray(row.ingredients)
-      ? row.ingredients.filter((ingredient): ingredient is string => typeof ingredient === "string" && ingredient.trim().length > 0)
-      : [],
+    ingredients: Array.isArray(row.ingredients) ? row.ingredients.flatMap((ingredient): RecipeIngredient[] => {
+      if (typeof ingredient === "string") return ingredient.trim() ? [{ name: ingredient.trim() }] : [];
+      if (!ingredient || typeof ingredient !== "object") return [];
+      const value = ingredient as Record<string, unknown>;
+      const name = typeof value.name === "string" ? value.name.trim() : typeof value.ingredient === "string" ? value.ingredient.trim() : "";
+      const unit = typeof value.unit === "string" ? value.unit.trim() : "";
+      return name ? [{ name, unit: unit || undefined }] : [];
+    }) : [],
   };
 }
 
@@ -184,7 +190,7 @@ export const recipes: Recipe[] = whenDemoDataEnabled([
     difficulty: "easy",
     category: "food",
     tags: ["Thai", "Dinner"],
-    ingredients: ["400 g chicken", "400 ml coconut milk", "2 tbsp green curry paste", "1 handful Thai basil"],
+    ingredients: [{ name: "Chicken", unit: "400 g" }, { name: "Coconut milk", unit: "400 ml" }, { name: "Green curry paste", unit: "2 tbsp" }, { name: "Thai basil", unit: "1 handful" }],
     image: "https://images.unsplash.com/photo-1455619452474-d2be8b1e70cd?auto=format&fit=crop&w=1200&q=80",
   },
   {
@@ -198,7 +204,7 @@ export const recipes: Recipe[] = whenDemoDataEnabled([
     difficulty: "easy",
     category: "food",
     tags: ["Japanese", "Healthy"],
-    ingredients: ["2 salmon fillets", "2 cups cooked rice", "1 cucumber", "2 tbsp sesame dressing"],
+    ingredients: [{ name: "Salmon fillets", unit: "2" }, { name: "Cooked rice", unit: "2 cups" }, { name: "Cucumber", unit: "1" }, { name: "Sesame dressing", unit: "2 tbsp" }],
     image: "https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=1200&q=80",
   },
   {
@@ -212,7 +218,7 @@ export const recipes: Recipe[] = whenDemoDataEnabled([
     difficulty: "medium",
     category: "food",
     tags: ["Italian", "Vegetarian"],
-    ingredients: ["250 g pasta", "250 g mushrooms", "200 ml cream", "50 g parmesan"],
+    ingredients: [{ name: "Pasta", unit: "250 g" }, { name: "Mushrooms", unit: "250 g" }, { name: "Cream", unit: "200 ml" }, { name: "Parmesan", unit: "50 g" }],
     image: "https://images.unsplash.com/photo-1473093295043-cdd812d0e601?auto=format&fit=crop&w=1200&q=80",
   },
   {
@@ -226,7 +232,7 @@ export const recipes: Recipe[] = whenDemoDataEnabled([
     difficulty: "medium",
     category: "dessert",
     tags: ["Thai", "Coconut"],
-    ingredients: ["2 cups sticky rice", "2 ripe mangoes", "400 ml coconut milk", "3 tbsp sugar"],
+    ingredients: [{ name: "Sticky rice", unit: "2 cups" }, { name: "Ripe mangoes", unit: "2" }, { name: "Coconut milk", unit: "400 ml" }, { name: "Sugar", unit: "3 tbsp" }],
     image: "https://images.unsplash.com/photo-1559847844-5315695dadae?auto=format&fit=crop&w=1200&q=80",
   },
   {
@@ -240,7 +246,7 @@ export const recipes: Recipe[] = whenDemoDataEnabled([
     difficulty: "easy",
     category: "beverage",
     tags: ["Thai", "Cold"],
-    ingredients: ["4 tbsp Thai tea mix", "500 ml water", "120 ml milk", "Ice"],
+    ingredients: [{ name: "Thai tea mix", unit: "4 tbsp" }, { name: "Water", unit: "500 ml" }, { name: "Milk", unit: "120 ml" }, { name: "Ice" }],
     image: "https://images.unsplash.com/photo-1556679343-c7306c1976bc?auto=format&fit=crop&w=1200&q=80",
   },
 ]);
