@@ -397,8 +397,8 @@ h1 { font-family: "Kanit", sans-serif; font-size: clamp(34px, 4vw, 48px); line-h
 .recipe-details-grid section { min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-muted); }
 .recipe-details-grid section:last-child { background: var(--surface); }
 .recipe-details-grid h3 { margin: 0 0 12px; font-family: "Kanit", sans-serif; font-size: 18px; font-weight: 500; }
-.recipe-details-grid ul { display: grid; gap: 8px; margin: 0; padding-left: 20px; color: var(--foreground); }
-.recipe-details-grid li { padding-left: 2px; font-size: 13px; line-height: 1.55; }
+.recipe-details-grid ul { display: grid; gap: 8px; margin: 0; padding-left: 0; color: var(--foreground); list-style-position: inside; }
+.recipe-details-grid li { padding-left: 0; font-size: 13px; line-height: 1.55; }
 .recipe-details-grid li::marker { color: var(--brand); }
 .recipe-details-grid li > strong { float: right; margin-left: 12px; color: var(--brand-strong); font-size: 12px; white-space: nowrap; }
 .recipe-method { margin: 0; color: var(--foreground); font-size: 13px; line-height: 1.75; white-space: pre-wrap; }
@@ -542,6 +542,25 @@ h1 { font-family: "Kanit", sans-serif; font-size: clamp(34px, 4vw, 48px); line-h
 @keyframes pop { from { opacity: 0; transform: translate(-50%, -48%) scale(.98); } }
 @keyframes date-picker-in { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
 
+@media (min-width: 1200px) {
+  .recipe-dialog { width: min(1040px, calc(100vw - 80px)); max-height: calc(100dvh - 48px); overflow-y: auto; }
+  .recipe-details-dialog { width: min(1240px, calc(100vw - 80px)); max-height: calc(100dvh - 48px); overflow-y: auto; }
+  .recipe-dialog h2 { font-size: 34px; }
+  .recipe-dialog .dialog-description { font-size: 15px; }
+  .recipe-dialog .field label, .recipe-dialog .recipe-field-heading > span { font-size: 13px; }
+  .recipe-dialog .field input, .recipe-dialog .field select, .recipe-dialog .field textarea { font-size: 16px; }
+  .recipe-dialog .field input, .recipe-dialog .field select { height: 48px; }
+  .recipe-ingredient-columns { font-size: 11px; }
+  .recipe-details-body { padding: 36px 42px 44px; }
+  .recipe-details-body h2 { font-size: 44px; }
+  .recipe-details-secondary { font-size: 16px; }
+  .recipe-details-facts span { font-size: 12px; }
+  .recipe-details-facts strong { font-size: 14px; }
+  .recipe-details-grid h3 { font-size: 22px; }
+  .recipe-details-grid li, .recipe-method, .recipe-details-empty { font-size: 15px; }
+  .recipe-details-grid li > strong { font-size: 14px; }
+}
+
 @media (min-width: 1920px) {
   .app-shell { grid-template-columns: 288px minmax(0, 1fr); }
   .sidebar { padding: 34px 24px 28px; }
@@ -561,22 +580,6 @@ h1 { font-family: "Kanit", sans-serif; font-size: clamp(34px, 4vw, 48px); line-h
   .calendar-grid { min-height: 680px; }
   .calendar-day { padding: 16px 12px; }
   .recipe-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 22px; }
-  .recipe-dialog { width: min(1040px, calc(100vw - 80px)); }
-  .recipe-details-dialog { width: min(1240px, calc(100vw - 80px)); }
-  .recipe-dialog h2 { font-size: 34px; }
-  .recipe-dialog .dialog-description { font-size: 15px; }
-  .recipe-dialog .field label, .recipe-dialog .recipe-field-heading > span { font-size: 13px; }
-  .recipe-dialog .field input, .recipe-dialog .field select, .recipe-dialog .field textarea { font-size: 16px; }
-  .recipe-dialog .field input, .recipe-dialog .field select { height: 48px; }
-  .recipe-ingredient-columns { font-size: 11px; }
-  .recipe-details-body { padding: 36px 42px 44px; }
-  .recipe-details-body h2 { font-size: 44px; }
-  .recipe-details-secondary { font-size: 16px; }
-  .recipe-details-facts span { font-size: 12px; }
-  .recipe-details-facts strong { font-size: 14px; }
-  .recipe-details-grid h3 { font-size: 22px; }
-  .recipe-details-grid li, .recipe-method, .recipe-details-empty { font-size: 15px; }
-  .recipe-details-grid li > strong { font-size: 14px; }
   .people-grid { gap: 22px; }
   .settings-stack { max-width: 900px; }
 }
