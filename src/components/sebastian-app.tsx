@@ -22,6 +22,7 @@ import {
   Clock3,
   CreditCard,
   Ellipsis,
+  GripVertical,
   ImagePlus,
   Languages,
   LayoutDashboard,
@@ -64,10 +65,11 @@ import { createClient as createSupabaseClient } from "@/lib/supabase/client";
 import { useLocale, useTheme } from "@/components/providers";
 
 type View = "overview" | "finances" | "calendar" | "recipes" | "household" | "settings";
-type Transaction = { id: string; title: string; category: string; date: string; amount: number; icon: string; savingsGoalId?: string };
-type FinancialCategory = { id: string; name: string; nameTh: string; color: string; isSystem?: boolean };
+type Transaction = { id: string; title: string; category: string; date: string; time?: string; amount: number; icon: string; savingsGoalId?: string };
+type FinancialCategory = { id: string; name: string; nameTh: string; color: string; sortOrder?: number; isSystem?: boolean };
 type ScheduledPayment = { id: string; title: string; amount: number; dueDate: string };
 type DebtInstallment = { id: string; name: string; paid: number; total: number; installment: number; totalMonths: number; paidMonths: number; dueDay: number; dueDate: string };
+type DebtInstallmentDraft = Pick<DebtInstallment, "name" | "total" | "totalMonths" | "paidMonths" | "dueDate">;
 type SavingsGoal = { id: string; name: string; current: number; target: number; targetDate?: string };
 type HouseholdMember = { userId: string; name: string; email: string; role: string; joinedAt: string };
 type HouseholdInvitation = { id: string; email: string; role: string; createdAt: string; expiresAt: string };
@@ -76,6 +78,8 @@ type UserProfile = { displayName: string; email: string; avatarUrl?: string };
 type PendingConfirmation =
   | { kind: "category"; category: FinancialCategory }
   | { kind: "calendar"; event: CalendarEvent }
+  | { kind: "debt"; debt: DebtInstallment }
+  | { kind: "transaction"; transaction: Transaction }
   | { kind: "recipe"; recipe: Recipe };
 type RecipeDraft = Omit<Recipe, "id" | "image"> & { imageFile?: File; removeImage?: boolean };
 
@@ -171,6 +175,11 @@ function isSavingsWithdrawal(transaction: Transaction) {
   return isSavingsTransfer(transaction) && transaction.amount > 0;
 }
 
+function savingsContribution(transaction: Transaction, goalId: string) {
+  if (transaction.savingsGoalId !== goalId) return 0;
+  return transaction.amount < 0 ? Math.abs(transaction.amount) : -transaction.amount;
+}
+
 function Transactions({ items, limit, emptyMessage = "No transactions in this period." }: { items: Transaction[]; limit?: number; emptyMessage?: string }) {
   const visibleItems = limit === undefined ? items : items.slice(0, limit);
   if (visibleItems.length === 0) return <div className="transaction-empty">{emptyMessage}</div>;
@@ -188,26 +197,74 @@ function Transactions({ items, limit, emptyMessage = "No transactions in this pe
   );
 }
 
-function DailyJournal({ locale, transactions, rangeLabel }: { locale: Locale; transactions: Transaction[]; rangeLabel: string }) {
+type JournalSort = "datetime" | "category";
+type SortDirection = "asc" | "desc";
+
+function transactionTime(transaction: Transaction) {
+  if (transaction.time) return transaction.time.slice(0, 5);
+  return transaction.date.match(/(?:^|,\s*)(\d{1,2}:\d{2})/)?.[1] ?? "";
+}
+
+function transactionDateTimeValue(transaction: Transaction) {
+  const date = transactionDate(transaction.date);
+  if (!date) return 0;
+  const [hours = 0, minutes = 0] = transactionTime(transaction).split(":").map(Number);
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), hours, minutes).getTime();
+}
+
+function currentTimeInputValue() {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Bangkok",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(new Date());
+}
+
+function DailyJournal({ locale, transactions, financialCategories, rangeLabel, onEdit, onDelete }: { locale: Locale; transactions: Transaction[]; financialCategories: FinancialCategory[]; rangeLabel: string; onEdit: (transaction: Transaction) => void; onDelete: (transaction: Transaction) => void }) {
+  const [sortBy, setSortBy] = useState<JournalSort>("datetime");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const cashFlowTransactions = transactions.filter((transaction) => !isSavingsTransfer(transaction));
   const income = cashFlowTransactions.reduce((total, transaction) => total + Math.max(transaction.amount, 0), 0);
   const expenses = cashFlowTransactions.reduce((total, transaction) => total + Math.abs(Math.min(transaction.amount, 0)), 0);
   const dateFormatter = new Intl.DateTimeFormat(locale === "th" ? "th-TH" : "en-GB", { day: "numeric", month: "short", year: "numeric" });
+  const categoriesByName = useMemo(() => new Map(financialCategories.map((category) => [category.name, category])), [financialCategories]);
+  const sortedTransactions = useMemo(() => {
+    const collator = new Intl.Collator(locale === "th" ? "th" : "en", { sensitivity: "base", numeric: true });
+    return transactions.toSorted((a, b) => {
+      const categoryA = categoriesByName.get(a.category);
+      const categoryB = categoriesByName.get(b.category);
+      const nameA = locale === "th" ? categoryA?.nameTh || a.category : a.category;
+      const nameB = locale === "th" ? categoryB?.nameTh || b.category : b.category;
+      const comparison = sortBy === "category"
+        ? (categoryA?.sortOrder ?? Number.MAX_SAFE_INTEGER) - (categoryB?.sortOrder ?? Number.MAX_SAFE_INTEGER)
+          || collator.compare(nameA, nameB)
+          || transactionDateTimeValue(a) - transactionDateTimeValue(b)
+        : transactionDateTimeValue(a) - transactionDateTimeValue(b);
+      return sortDirection === "asc" ? comparison : -comparison;
+    });
+  }, [categoriesByName, locale, sortBy, sortDirection, transactions]);
 
   return (
     <div className="card daily-journal-card">
       <div className="card-header daily-journal-header">
         <div><h2 className="card-title">{locale === "th" ? "บันทึกรายวัน" : "Daily journal"}</h2><p className="card-subtitle">{rangeLabel} · {transactions.length} {locale === "th" ? "รายการ" : `entr${transactions.length === 1 ? "y" : "ies"}`}</p></div>
-        <div className="journal-summary" aria-label={locale === "th" ? "สรุปรายรับรายจ่ายตามช่วงวันที่เลือก" : "Financial summary for the selected dates"}>
-          <div><span>{locale === "th" ? "รายรับ" : "Income"}</span><strong className="positive">+{formatMoney(income)}</strong></div>
-          <div><span>{locale === "th" ? "รายจ่าย" : "Expenses"}</span><strong className="negative">−{formatMoney(expenses)}</strong></div>
-          <div><span>{locale === "th" ? "สุทธิ" : "Net"}</span><strong>{formatMoney(income - expenses)}</strong></div>
+        <div className="journal-header-actions">
+          <div className="journal-sort-controls" role="group" aria-label={locale === "th" ? "จัดเรียงบันทึกรายวัน" : "Sort daily journal"}>
+            <label><span>{locale === "th" ? "เรียงตาม" : "Sort by"}</span><select value={sortBy} onChange={(event) => setSortBy(event.target.value as JournalSort)}><option value="datetime">{locale === "th" ? "วันที่และเวลา" : "Date & time"}</option><option value="category">{locale === "th" ? "ลำดับหมวดหมู่" : "Category sequence"}</option></select></label>
+            <label><span>{locale === "th" ? "ลำดับ" : "Order"}</span><select value={sortDirection} onChange={(event) => setSortDirection(event.target.value as SortDirection)}><option value="asc">{locale === "th" ? "น้อยไปมาก" : "Ascending"}</option><option value="desc">{locale === "th" ? "มากไปน้อย" : "Descending"}</option></select></label>
+          </div>
+          <div className="journal-summary" aria-label={locale === "th" ? "สรุปรายรับรายจ่ายตามช่วงวันที่เลือก" : "Financial summary for the selected dates"}>
+            <div><span>{locale === "th" ? "รายรับ" : "Income"}</span><strong className="positive">+{formatMoney(income)}</strong></div>
+            <div><span>{locale === "th" ? "รายจ่าย" : "Expenses"}</span><strong className="negative">−{formatMoney(expenses)}</strong></div>
+            <div><span>{locale === "th" ? "สุทธิ" : "Net"}</span><strong>{formatMoney(income - expenses)}</strong></div>
+          </div>
         </div>
       </div>
       <div className="journal-table-wrap">
         <table className="journal-table">
-          <thead><tr><th scope="col">{locale === "th" ? "รายการ" : "Entry"}</th><th scope="col">{locale === "th" ? "วันที่" : "Date"}</th><th scope="col">{locale === "th" ? "หมวดหมู่" : "Category"}</th><th scope="col">{locale === "th" ? "ประเภท" : "Type"}</th><th className="journal-amount" scope="col">{locale === "th" ? "จำนวนเงิน" : "Amount"}</th></tr></thead>
-          <tbody>{transactions.length === 0 ? <tr><td className="journal-empty" colSpan={5}>{locale === "th" ? "ยังไม่มีรายการในช่วงวันที่เลือก" : "No income or expenses in the selected dates."}</td></tr> : transactions.map((transaction) => { const occurredOn = transactionDate(transaction.date); const savingsTransfer = isSavingsTransfer(transaction); const savingsWithdrawal = isSavingsWithdrawal(transaction); return <tr key={transaction.id}><td><div className="journal-entry"><span className="transaction-icon"><TransactionIcon name={transaction.icon} /></span><strong>{transaction.title}</strong></div></td><td>{occurredOn ? dateFormatter.format(occurredOn) : transaction.date}</td><td>{transaction.category}</td><td><span className={cn("journal-type", savingsTransfer ? savingsWithdrawal ? "savings-withdrawal" : "savings" : transaction.amount >= 0 ? "income" : "expense")}>{savingsTransfer ? savingsWithdrawal ? (locale === "th" ? "ถอนเงินออม" : "Withdrawal") : (locale === "th" ? "ฝากเงินออม" : "Deposit") : transaction.amount >= 0 ? (locale === "th" ? "รายรับ" : "Income") : (locale === "th" ? "รายจ่าย" : "Expense")}</span></td><td className={cn("journal-amount", savingsTransfer ? savingsWithdrawal ? "savings-withdrawal" : "savings" : transaction.amount >= 0 ? "positive" : "negative")}>{savingsTransfer ? savingsWithdrawal ? "←" : "→" : transaction.amount >= 0 ? "+" : "−"}{formatMoney(Math.abs(transaction.amount))}</td></tr>; })}</tbody>
+          <thead><tr><th scope="col">{locale === "th" ? "รายการ" : "Entry"}</th><th scope="col">{locale === "th" ? "วันที่" : "Date"}</th><th scope="col">{locale === "th" ? "เวลา" : "Time"}</th><th scope="col">{locale === "th" ? "หมวดหมู่" : "Category"}</th><th scope="col">{locale === "th" ? "ประเภท" : "Type"}</th><th className="journal-amount" scope="col">{locale === "th" ? "จำนวนเงิน" : "Amount"}</th><th className="journal-actions" scope="col">{locale === "th" ? "จัดการ" : "Actions"}</th></tr></thead>
+          <tbody>{transactions.length === 0 ? <tr><td className="journal-empty" colSpan={7}>{locale === "th" ? "ยังไม่มีรายการในช่วงวันที่เลือก" : "No income or expenses in the selected dates."}</td></tr> : sortedTransactions.map((transaction) => { const occurredOn = transactionDate(transaction.date); const category = categoriesByName.get(transaction.category); const categoryName = locale === "th" ? category?.nameTh || transaction.category : transaction.category; const savingsTransfer = isSavingsTransfer(transaction); const savingsWithdrawal = isSavingsWithdrawal(transaction); return <tr key={transaction.id}><td><div className="journal-entry"><span className="transaction-icon"><TransactionIcon name={transaction.icon} /></span><strong>{transaction.title}</strong></div></td><td>{occurredOn ? dateFormatter.format(occurredOn) : transaction.date}</td><td className="journal-time">{transactionTime(transaction) || "—"}</td><td><span className="journal-category"><i className="dot" style={{ background: category?.color ?? "var(--muted)" }} />{categoryName}</span></td><td><span className={cn("journal-type", savingsTransfer ? savingsWithdrawal ? "savings-withdrawal" : "savings" : transaction.amount >= 0 ? "income" : "expense")}>{savingsTransfer ? savingsWithdrawal ? (locale === "th" ? "ถอนเงินออม" : "Withdrawal") : (locale === "th" ? "ฝากเงินออม" : "Deposit") : transaction.amount >= 0 ? (locale === "th" ? "รายรับ" : "Income") : (locale === "th" ? "รายจ่าย" : "Expense")}</span></td><td className={cn("journal-amount", savingsTransfer ? savingsWithdrawal ? "savings-withdrawal" : "savings" : transaction.amount >= 0 ? "positive" : "negative")}>{savingsTransfer ? savingsWithdrawal ? "←" : "→" : transaction.amount >= 0 ? "+" : "−"}{formatMoney(Math.abs(transaction.amount))}</td><td className="journal-actions"><div className="journal-row-actions"><button type="button" onClick={() => onEdit(transaction)} aria-label={locale === "th" ? `แก้ไข ${transaction.title}` : `Edit ${transaction.title}`}><Pencil size={14} /></button><button className="delete" type="button" onClick={() => onDelete(transaction)} aria-label={locale === "th" ? `ลบ ${transaction.title}` : `Delete ${transaction.title}`}><Trash2 size={14} /></button></div></td></tr>; })}</tbody>
         </table>
       </div>
     </div>
@@ -516,11 +573,15 @@ function FinanceDateSelector({ value, range, period, locale, onDateChange, onRan
   );
 }
 
-function Finances({ locale, transactions, financialCategories, debtInstallments, savingsGoals, onAddCategory, onDeleteCategory, onAddSavings, onAddSavingsTransaction, onAddInstallment, onRecordInstallment }: { locale: Locale; transactions: Transaction[]; financialCategories: FinancialCategory[]; debtInstallments: DebtInstallment[]; savingsGoals: SavingsGoal[]; onAddCategory: () => void; onDeleteCategory: (category: FinancialCategory) => void; onAddSavings: () => void; onAddSavingsTransaction: (goal: SavingsGoal) => void; onAddInstallment: () => void; onRecordInstallment: (debt: DebtInstallment) => void }) {
+function Finances({ locale, transactions, financialCategories, debtInstallments, savingsGoals, onEditTransaction, onDeleteTransaction, onAddCategory, onEditCategory, onDeleteCategory, onReorderCategories, onAddSavings, onAddSavingsTransaction, onAddInstallment, onEditInstallment, onDeleteInstallment, onRecordInstallment }: { locale: Locale; transactions: Transaction[]; financialCategories: FinancialCategory[]; debtInstallments: DebtInstallment[]; savingsGoals: SavingsGoal[]; onEditTransaction: (transaction: Transaction) => void; onDeleteTransaction: (transaction: Transaction) => void; onAddCategory: () => void; onEditCategory: (category: FinancialCategory) => void; onDeleteCategory: (category: FinancialCategory) => void; onReorderCategories: (orderedIds: string[]) => void | Promise<void>; onAddSavings: () => void; onAddSavingsTransaction: (goal: SavingsGoal) => void; onAddInstallment: () => void; onEditInstallment: (debt: DebtInstallment) => void; onDeleteInstallment: (debt: DebtInstallment) => void; onRecordInstallment: (debt: DebtInstallment) => void }) {
   const t = copy[locale];
-  const [period, setPeriod] = useState<FinancePeriod>("month");
+  const [period, setPeriod] = useState<FinancePeriod>("day");
   const [selectedDate, setSelectedDate] = useState(todayInputValue);
   const [customRange, setCustomRange] = useState(() => { const today = todayInputValue(); return { from: today, to: today }; });
+  const [reorderingCategories, setReorderingCategories] = useState(false);
+  const [savingCategoryOrder, setSavingCategoryOrder] = useState(false);
+  const [draggedCategoryId, setDraggedCategoryId] = useState<string>();
+  const [draftCategoryIds, setDraftCategoryIds] = useState<string[]>([]);
   const selected = useMemo(() => dateFromInputValue(selectedDate), [selectedDate]);
   const range = useMemo<FinanceRange>(() => {
     if (period !== "range") return financeRange(period, selected);
@@ -561,6 +622,15 @@ function Finances({ locale, transactions, financialCategories, debtInstallments,
       .map(([name, value], index) => ({ name: `${name} (${locale === "th" ? "เก็บถาวร" : "Archived"})`, value, color: palette[index % palette.length], archived: true }));
     return [...configured, ...unconfigured];
   }, [filteredCashFlowTransactions, financialCategories, locale]);
+  const displayedCategoryRows = useMemo(() => {
+    if (!reorderingCategories) return categoryRows;
+    const rowsById = new Map(categoryRows.flatMap((row) => row.id ? [[row.id, row] as const] : []));
+    const configuredRows = draftCategoryIds.flatMap((id) => {
+      const row = rowsById.get(id);
+      return row ? [row] : [];
+    });
+    return [...configuredRows, ...categoryRows.filter((row) => !row.id)];
+  }, [categoryRows, draftCategoryIds, reorderingCategories]);
   const categoryData = categoryRows.filter((category) => category.value > 0).sort((a, b) => b.value - a.value);
   const barChartData = useMemo<SpendingPoint[]>(() => {
     const language = locale === "th" ? "th-TH" : "en-GB";
@@ -630,6 +700,54 @@ function Finances({ locale, transactions, financialCategories, debtInstallments,
     setPeriod("day");
   }
 
+  function beginCategoryReorder() {
+    setDraftCategoryIds(financialCategories.map((category) => category.id));
+    setReorderingCategories(true);
+  }
+
+  function cancelCategoryReorder() {
+    setDraftCategoryIds([]);
+    setDraggedCategoryId(undefined);
+    setReorderingCategories(false);
+  }
+
+  function moveCategory(sourceId: string, targetId: string) {
+    if (sourceId === targetId) return;
+    setDraftCategoryIds((current) => {
+      if (!current.includes(sourceId) || !current.includes(targetId)) return current;
+      const targetIndex = current.indexOf(targetId);
+      const next = current.filter((id) => id !== sourceId);
+      next.splice(targetIndex, 0, sourceId);
+      return next;
+    });
+  }
+
+  function moveCategoryByOffset(categoryId: string, offset: -1 | 1) {
+    setDraftCategoryIds((current) => {
+      const currentIndex = current.indexOf(categoryId);
+      const nextIndex = currentIndex + offset;
+      if (currentIndex < 0 || nextIndex < 0 || nextIndex >= current.length) return current;
+      const next = [...current];
+      [next[currentIndex], next[nextIndex]] = [next[nextIndex], next[currentIndex]];
+      return next;
+    });
+  }
+
+  async function saveCategoryOrder() {
+    if (savingCategoryOrder) return;
+    setSavingCategoryOrder(true);
+    try {
+      await onReorderCategories(draftCategoryIds);
+      setReorderingCategories(false);
+      setDraftCategoryIds([]);
+      toast.success(locale === "th" ? "บันทึกลำดับหมวดหมู่แล้ว" : "Category sequence saved");
+    } catch {
+      // The data handler reports the error and keeps the draft available for retry.
+    } finally {
+      setSavingCategoryOrder(false);
+    }
+  }
+
   return <>
     <div className="section-toolbar finance-toolbar"><div className="period-tabs finance-period-tabs">{(["day", "week", "month", "year", "range"] as const).map((item) => <button type="button" key={item} className={period === item ? "active" : ""} aria-pressed={period === item} onClick={() => changePeriod(item)}>{periodNames[item]}</button>)}</div><FinanceDateSelector value={selectedDate} range={range} period={period} locale={locale} onDateChange={changeSingleDate} onRangeChange={changeCustomRange} /></div>
     <Metrics locale={locale} transactions={filteredCashFlowTransactions} rangeLabel={periodLabel} duePayments={filteredPayments} />
@@ -640,18 +758,58 @@ function Finances({ locale, transactions, financialCategories, debtInstallments,
       </div>
       <div className="card debt-card">
         <div className="card-header"><div><h2 className="card-title">{t.debt}</h2><p className="card-subtitle">{periodLabel}</p></div><button className="text-button" type="button" onClick={onAddInstallment}><Plus size={13} />{locale === "th" ? "เพิ่มยอดผ่อน" : "Add installment"}</button></div>
-        {filteredDebts.length > 0 ? filteredDebts.map((debt) => { const pct = Math.min(Math.round(debt.paidMonths / debt.totalMonths * 100), 100); const dueDate = new Intl.DateTimeFormat(locale === "th" ? "th-TH" : "en-GB", { day: "numeric", month: "short", year: "numeric" }).format(dateFromInputValue(debt.dueDate)); return <div className="debt-item" key={debt.id}><div className="debt-top"><strong>{debt.name}</strong><span>{debt.paidMonths}/{debt.totalMonths} {locale === "th" ? "เดือน" : "months"}</span></div><div className="progress"><div className="progress-bar" style={{width: `${pct}%`, background: "var(--brand)"}} /></div><div className="debt-footer"><span>{formatMoney(debt.total - debt.paid)} {t.remaining} · {formatMoney(debt.installment)}/{locale === "th" ? "เดือน" : "month"} · {locale === "th" ? "ครบกำหนด" : "due"} {dueDate}</span><button className="text-button" type="button" onClick={() => onRecordInstallment(debt)}>{locale === "th" ? "ชำระเดือนนี้" : "Pay this month"}</button></div></div>; }) : <div className="category-empty">{locale === "th" ? "ไม่มียอดผ่อนครบกำหนดในช่วงวันที่เลือก" : "No installments due in the selected dates."}</div>}
+        {filteredDebts.length > 0 ? filteredDebts.map((debt) => { const pct = Math.min(Math.round(debt.paidMonths / debt.totalMonths * 100), 100); const dueDate = new Intl.DateTimeFormat(locale === "th" ? "th-TH" : "en-GB", { day: "numeric", month: "short", year: "numeric" }).format(dateFromInputValue(debt.dueDate)); return <div className="debt-item" key={debt.id}><div className="debt-top"><strong>{debt.name}</strong><div className="debt-top-actions"><span>{debt.paidMonths}/{debt.totalMonths} {locale === "th" ? "เดือน" : "months"}</span><button className="debt-edit" type="button" onClick={() => onEditInstallment(debt)} aria-label={locale === "th" ? `แก้ไข ${debt.name}` : `Edit ${debt.name}`}><Pencil size={14} /></button><button className="debt-delete" type="button" onClick={() => onDeleteInstallment(debt)} aria-label={locale === "th" ? `ลบ ${debt.name}` : `Delete ${debt.name}`}><Trash2 size={14} /></button></div></div><div className="progress"><div className="progress-bar" style={{width: `${pct}%`, background: "var(--brand)"}} /></div><div className="debt-footer"><span>{formatMoney(debt.total - debt.paid)} {t.remaining} · {formatMoney(debt.installment)}/{locale === "th" ? "เดือน" : "month"} · {locale === "th" ? "ครบกำหนด" : "due"} {dueDate}</span><button className="text-button" type="button" onClick={() => onRecordInstallment(debt)}>{locale === "th" ? "ชำระเดือนนี้" : "Pay this month"}</button></div></div>; }) : <div className="category-empty">{locale === "th" ? "ไม่มียอดผ่อนครบกำหนดในช่วงวันที่เลือก" : "No installments due in the selected dates."}</div>}
       </div>
     </div>
     <div className="finance-visual-grid">
       <div className="card"><div className="card-header"><div><h2 className="card-title">{locale === "th" ? "กระแสเงินสดและเงินออม" : "Cash flow & savings"}</h2><p className="card-subtitle">{periodLabel}</p></div><div className="legend"><span><i style={{ background: "var(--brand)" }} />{t.income}</span><span><i style={{ background: "var(--yellow)" }} />{t.expenses}</span><span><i style={{ background: "var(--violet)" }} />{locale === "th" ? "เงินออม" : "Savings"}</span></div></div><MoneyChart data={barChartData} locale={locale} /></div>
       <div className="card category-chart-card"><div className="card-header"><div><h2 className="card-title">{locale === "th" ? "สัดส่วนเงินออก" : "Outflow breakdown"}</h2><p className="card-subtitle">{periodLabel}</p></div></div><CategoryPieChart data={outflowData} total={outflowTotal} locale={locale} /></div>
     </div>
-    <DailyJournal locale={locale} transactions={filteredTransactions} rangeLabel={periodLabel} />
+    <DailyJournal locale={locale} transactions={filteredTransactions} financialCategories={financialCategories} rangeLabel={periodLabel} onEdit={onEditTransaction} onDelete={onDeleteTransaction} />
     <div className="finance-grid">
       <div className="stack"><div className="card"><div className="card-header"><div><h2 className="card-title">{t.allTransactions}</h2><p className="card-subtitle">{transactionLabel} · {periodLabel}</p></div><button className="icon-btn" aria-label="Transaction options"><Ellipsis size={15}/></button></div><Transactions items={filteredTransactions} emptyMessage={locale === "th" ? "ไม่มีรายการในช่วงวันที่เลือก" : "No transactions in the selected dates."} /></div></div>
       <div className="stack">
-        <div className="card"><div className="card-header"><div><h2 className="card-title">{t.category}</h2><p className="card-subtitle">{locale === "th" ? `${categoryRows.length} หมวดหมู่` : `${categoryRows.length} categor${categoryRows.length === 1 ? "y" : "ies"}`}</p></div><button className="text-button" type="button" onClick={onAddCategory}><Plus size={13} />{locale === "th" ? "เพิ่มหมวดหมู่" : "Add Category"}</button></div>{categoryRows.length > 0 ? categoryRows.map((cat) => <div className="category-row category-list-row" key={cat.id ?? cat.name}><div className="category-name"><i className="dot" style={{background: cat.color}} />{cat.name}</div><div className="category-row-actions">{cat.id && !cat.isSystem ? <button className="category-delete" type="button" aria-label={`${locale === "th" ? "ลบหมวดหมู่" : "Remove category"} ${cat.name}`} onClick={() => { const category = financialCategories.find((item) => item.id === cat.id); if (category) onDeleteCategory(category); }}><Trash2 size={13} /></button> : null}</div></div>) : <div className="category-empty">{locale === "th" ? "ยังไม่มีหมวดหมู่" : "No categories yet"}</div>}</div>
+        <div className="card category-list-card">
+          <div className="card-header">
+            <div><h2 className="card-title">{t.category}</h2><p className="card-subtitle">{reorderingCategories ? (locale === "th" ? "ลากเพื่อจัดลำดับใหม่" : "Drag to set the sequence") : locale === "th" ? `${categoryRows.length} หมวดหมู่` : `${categoryRows.length} categor${categoryRows.length === 1 ? "y" : "ies"}`}</p></div>
+            {reorderingCategories ? (
+              <div className="category-order-actions">
+                <button className="secondary-btn" type="button" disabled={savingCategoryOrder} onClick={cancelCategoryReorder}>{copy[locale].cancel}</button>
+                <button className="primary-btn" type="button" disabled={savingCategoryOrder} onClick={saveCategoryOrder}>{savingCategoryOrder ? (locale === "th" ? "กำลังบันทึก…" : "Saving…") : (locale === "th" ? "บันทึกลำดับ" : "Save sequence")}</button>
+              </div>
+            ) : (
+              <div className="category-card-actions">
+                <button className="text-button" type="button" disabled={financialCategories.length < 2} onClick={beginCategoryReorder}><GripVertical size={13} />{locale === "th" ? "จัดลำดับ" : "Rearrange"}</button>
+                <button className="text-button" type="button" onClick={onAddCategory}><Plus size={13} />{locale === "th" ? "เพิ่มหมวดหมู่" : "Add Category"}</button>
+              </div>
+            )}
+          </div>
+          {displayedCategoryRows.length > 0 ? displayedCategoryRows.map((cat) => (
+            <div
+              className={cn("category-row", "category-list-row", reorderingCategories && cat.id && "reordering", draggedCategoryId === cat.id && "dragging")}
+              key={cat.id ?? cat.name}
+              data-category-id={cat.id}
+              draggable={reorderingCategories && Boolean(cat.id)}
+              onDragStart={(event) => {
+                if (!cat.id) return;
+                setDraggedCategoryId(cat.id);
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData("text/plain", cat.id);
+              }}
+              onDragOver={(event) => { if (reorderingCategories && cat.id) event.preventDefault(); }}
+              onDragEnter={() => { if (cat.id && draggedCategoryId) moveCategory(draggedCategoryId, cat.id); }}
+              onDragEnd={() => setDraggedCategoryId(undefined)}
+              onDrop={(event) => { event.preventDefault(); setDraggedCategoryId(undefined); }}
+            >
+              {reorderingCategories && cat.id ? <button className="category-drag-handle" type="button" aria-label={`${locale === "th" ? "ย้ายหมวดหมู่" : "Move category"} ${cat.name}`} onKeyDown={(event) => { if (event.key === "ArrowUp" || event.key === "ArrowDown") { event.preventDefault(); moveCategoryByOffset(cat.id!, event.key === "ArrowUp" ? -1 : 1); } }} onPointerDown={(event) => { if (event.pointerType === "mouse") return; event.currentTarget.setPointerCapture(event.pointerId); setDraggedCategoryId(cat.id); }} onPointerMove={(event) => { if (event.pointerType === "mouse" || !event.currentTarget.hasPointerCapture(event.pointerId)) return; const targetId = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-category-id]")?.dataset.categoryId; if (targetId) moveCategory(cat.id!, targetId); }} onPointerUp={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); setDraggedCategoryId(undefined); }} onPointerCancel={() => setDraggedCategoryId(undefined)}><GripVertical size={16} /></button> : null}
+              <div className="category-name"><i className="dot" style={{background: cat.color}} />{cat.name}</div>
+              <div className="category-row-actions">
+                {!reorderingCategories && cat.id ? <button className="category-edit" type="button" aria-label={`${locale === "th" ? "แก้ไขหมวดหมู่" : "Edit category"} ${cat.name}`} onClick={() => { const category = financialCategories.find((item) => item.id === cat.id); if (category) onEditCategory(category); }}><Pencil size={13} /></button> : null}
+                {!reorderingCategories && cat.id && !cat.isSystem ? <button className="category-delete" type="button" aria-label={`${locale === "th" ? "ลบหมวดหมู่" : "Remove category"} ${cat.name}`} onClick={() => { const category = financialCategories.find((item) => item.id === cat.id); if (category) onDeleteCategory(category); }}><Trash2 size={13} /></button> : null}
+              </div>
+            </div>
+          )) : <div className="category-empty">{locale === "th" ? "ยังไม่มีหมวดหมู่" : "No categories yet"}</div>}
+        </div>
       </div>
     </div>
   </>;
@@ -1384,17 +1542,22 @@ function CalendarEventDialog({ open, onOpenChange, locale, defaultDate, event: e
   );
 }
 
-function CategoryDialog({ open, onOpenChange, locale, onAdd }: { open: boolean; onOpenChange: (open: boolean) => void; locale: Locale; onAdd: (category: { name: string; nameTh: string }) => void | Promise<void> }) {
+function CategoryDialog({ open, onOpenChange, locale, category, onSave }: { open: boolean; onOpenChange: (open: boolean) => void; locale: Locale; category?: FinancialCategory; onSave: (fields: { name: string; nameTh: string; color: string }) => void | Promise<void> }) {
   const { submitting, run } = useSubmissionGuard();
+  const [color, setColor] = useState(category?.color ?? "#3a7d6f");
+  const editing = Boolean(category);
 
   async function submit(formData: FormData) {
-    const name = String(formData.get("name") ?? "").trim();
-    const nameTh = String(formData.get("nameTh") ?? "").trim();
-    if (!name || !nameTh) return;
+    const name = category?.isSystem ? category.name : String(formData.get("name") ?? "").trim();
+    const nameTh = category?.isSystem ? category.nameTh : String(formData.get("nameTh") ?? "").trim();
+    const normalizedColor = /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : "";
+    if (!name || !nameTh || !normalizedColor) return;
     try {
       await run(async () => {
-        await onAdd({ name, nameTh });
-        toast.success(locale === "th" ? `เพิ่มหมวดหมู่ “${nameTh}” แล้ว` : `Category “${name}” added`);
+        await onSave({ name, nameTh, color: normalizedColor });
+        toast.success(editing
+          ? locale === "th" ? `อัปเดตหมวดหมู่ “${nameTh}” แล้ว` : `Category “${name}" updated`
+          : locale === "th" ? `เพิ่มหมวดหมู่ “${nameTh}” แล้ว` : `Category “${name}" added`);
         onOpenChange(false);
       });
     } catch {
@@ -1407,22 +1570,31 @@ function CategoryDialog({ open, onOpenChange, locale, onAdd }: { open: boolean; 
       <Dialog.Portal>
         <Dialog.Overlay className="overlay" />
         <Dialog.Content className="dialog category-dialog">
-          <Dialog.Title>{locale === "th" ? "เพิ่มหมวดหมู่" : "Add Category"}</Dialog.Title>
-          <Dialog.Description className="dialog-description">{locale === "th" ? "ตั้งชื่อหมวดหมู่ทั้งภาษาอังกฤษและภาษาไทย" : "Name this category in both English and Thai."}</Dialog.Description>
+          <Dialog.Title>{editing ? (locale === "th" ? "แก้ไขหมวดหมู่" : "Edit Category") : (locale === "th" ? "เพิ่มหมวดหมู่" : "Add Category")}</Dialog.Title>
+          <Dialog.Description className="dialog-description">{category?.isSystem
+            ? (locale === "th" ? "ปรับสีของหมวดหมู่ระบบนี้" : "Customize this system category’s color.")
+            : (locale === "th" ? "ตั้งชื่อหมวดหมู่ทั้งภาษาอังกฤษและภาษาไทย พร้อมเลือกสี" : "Name this category in English and Thai, then choose its color.")}</Dialog.Description>
           <form action={submit}>
             <div className="field-grid category-field-grid">
               <div className="field full">
                 <label htmlFor="category-name-en">English name</label>
-                <input id="category-name-en" name="name" type="text" required autoComplete="off" placeholder="e.g. Healthcare…" />
+                <input id="category-name-en" name="name" type="text" required autoComplete="off" placeholder="e.g. Healthcare…" defaultValue={category?.name} disabled={category?.isSystem} />
               </div>
               <div className="field full">
                 <label htmlFor="category-name-th">Thai name · ชื่อภาษาไทย</label>
-                <input id="category-name-th" name="nameTh" type="text" required autoComplete="off" placeholder="เช่น สุขภาพ…" />
+                <input id="category-name-th" name="nameTh" type="text" required autoComplete="off" placeholder="เช่น สุขภาพ…" defaultValue={category?.nameTh} disabled={category?.isSystem} />
+              </div>
+              <div className="field full">
+                <label htmlFor="category-color-text">{locale === "th" ? "สีหมวดหมู่" : "Category color"}</label>
+                <div className="category-color-control">
+                  <input className="category-color-picker" aria-label={locale === "th" ? "เลือกสีหมวดหมู่" : "Choose category color"} type="color" value={/^#[0-9a-f]{6}$/i.test(color) ? color : "#3a7d6f"} onChange={(event) => setColor(event.target.value)} />
+                  <input id="category-color-text" name="color" type="text" value={color} onChange={(event) => setColor(event.target.value)} pattern="#[0-9A-Fa-f]{6}" maxLength={7} required autoComplete="off" placeholder="#3a7d6f" spellCheck={false} />
+                </div>
               </div>
             </div>
             <div className="dialog-actions">
               <Dialog.Close asChild><button className="secondary-btn" type="button" disabled={submitting}>{copy[locale].cancel}</button></Dialog.Close>
-              <button className="primary-btn" type="submit" disabled={submitting}>{submitting ? (locale === "th" ? "กำลังบันทึก…" : "Saving…") : locale === "th" ? "เพิ่มหมวดหมู่" : "Add Category"}</button>
+              <button className="primary-btn" type="submit" disabled={submitting}>{submitting ? (locale === "th" ? "กำลังบันทึก…" : "Saving…") : editing ? (locale === "th" ? "บันทึกการเปลี่ยนแปลง" : "Save changes") : (locale === "th" ? "เพิ่มหมวดหมู่" : "Add Category")}</button>
             </div>
           </form>
         </Dialog.Content>
@@ -1431,10 +1603,11 @@ function CategoryDialog({ open, onOpenChange, locale, onAdd }: { open: boolean; 
   );
 }
 
-function FinancePlanDialog({ open, onOpenChange, locale, kind, onAddSavings, onAddInstallment }: { open: boolean; onOpenChange: (open: boolean) => void; locale: Locale; kind: "savings" | "installment"; onAddSavings: (goal: { name: string; target: number; targetDate?: string }) => void | Promise<void>; onAddInstallment: (debt: { name: string; total: number; totalMonths: number; paidMonths: number; dueDate: string }) => void | Promise<void> }) {
-  const [date, setDate] = useState(kind === "installment" ? todayInputValue() : "");
+function FinancePlanDialog({ open, onOpenChange, locale, kind, installment, onAddSavings, onAddInstallment, onUpdateInstallment }: { open: boolean; onOpenChange: (open: boolean) => void; locale: Locale; kind: "savings" | "installment"; installment?: DebtInstallment; onAddSavings: (goal: { name: string; target: number; targetDate?: string }) => void | Promise<void>; onAddInstallment: (debt: DebtInstallmentDraft) => void | Promise<void>; onUpdateInstallment: (installment: DebtInstallment, debt: DebtInstallmentDraft) => void | Promise<void> }) {
+  const [date, setDate] = useState(installment?.dueDate ?? (kind === "installment" ? todayInputValue() : ""));
   const { submitting, run } = useSubmissionGuard();
   const isSavings = kind === "savings";
+  const editingInstallment = !isSavings && Boolean(installment);
 
   async function submit(formData: FormData) {
     const name = String(formData.get("name") ?? "").trim();
@@ -1449,8 +1622,13 @@ function FinancePlanDialog({ open, onOpenChange, locale, kind, onAddSavings, onA
     try {
       await run(async () => {
         if (isSavings) await onAddSavings({ name, target: total, targetDate: date || undefined });
+        else if (installment) await onUpdateInstallment(installment, { name, total, totalMonths, paidMonths, dueDate: date });
         else await onAddInstallment({ name, total, totalMonths, paidMonths, dueDate: date });
-        toast.success(isSavings ? (locale === "th" ? "เพิ่มเป้าหมายเงินออมแล้ว" : "Savings goal added") : (locale === "th" ? "เพิ่มยอดผ่อนแล้ว" : "Installment added"));
+        toast.success(isSavings
+          ? (locale === "th" ? "เพิ่มเป้าหมายเงินออมแล้ว" : "Savings goal added")
+          : editingInstallment
+            ? (locale === "th" ? "บันทึกการแก้ไขยอดผ่อนแล้ว" : "Installment updated")
+            : (locale === "th" ? "เพิ่มยอดผ่อนแล้ว" : "Installment added"));
         onOpenChange(false);
       });
     } catch {
@@ -1463,16 +1641,16 @@ function FinancePlanDialog({ open, onOpenChange, locale, kind, onAddSavings, onA
       <Dialog.Portal>
         <Dialog.Overlay className="overlay" />
         <Dialog.Content className="dialog finance-plan-dialog">
-          <Dialog.Title>{isSavings ? (locale === "th" ? "เพิ่มเป้าหมายเงินออม" : "Add savings goal") : (locale === "th" ? "เพิ่มยอดผ่อน" : "Add installment")}</Dialog.Title>
-          <Dialog.Description className="dialog-description">{isSavings ? (locale === "th" ? "สร้างสินทรัพย์เงินออม แล้วเพิ่มยอดผ่านรายการหมวดหมู่เงินออม" : "Create a savings asset, then fund it with Savings transactions.") : (locale === "th" ? "ระบบจะคำนวณค่างวดรายเดือนจากยอดทั้งหมดและจำนวนเดือน" : "The monthly payment is calculated from the original amount and number of months.")}</Dialog.Description>
+          <Dialog.Title>{isSavings ? (locale === "th" ? "เพิ่มเป้าหมายเงินออม" : "Add savings goal") : editingInstallment ? (locale === "th" ? "แก้ไขยอดผ่อน" : "Edit installment") : (locale === "th" ? "เพิ่มยอดผ่อน" : "Add installment")}</Dialog.Title>
+          <Dialog.Description className="dialog-description">{isSavings ? (locale === "th" ? "สร้างสินทรัพย์เงินออม แล้วเพิ่มยอดผ่านรายการหมวดหมู่เงินออม" : "Create a savings asset, then fund it with Savings transactions.") : editingInstallment ? (locale === "th" ? "แก้ไขยอดตั้งต้น จำนวนเดือนที่ชำระแล้ว และวันครบกำหนดครั้งถัดไป" : "Update the original amount, payment progress, and next due date.") : (locale === "th" ? "ระบบจะคำนวณค่างวดรายเดือนจากยอดทั้งหมดและจำนวนเดือน" : "The monthly payment is calculated from the original amount and number of months.")}</Dialog.Description>
           <form action={submit}>
             <div className="field-grid">
-              <div className="field full"><label htmlFor={`${kind}-name`}>{isSavings ? (locale === "th" ? "ชื่อเป้าหมาย" : "Goal name") : (locale === "th" ? "ชื่อยอดผ่อน" : "Installment name")}</label><input id={`${kind}-name`} name="name" type="text" required placeholder={isSavings ? "e.g. Emergency fund" : "e.g. Home renovation"} /></div>
-              <div className={cn("field", isSavings && "full")}><label htmlFor={`${kind}-total`}>{isSavings ? (locale === "th" ? "ยอดเป้าหมาย" : "Target amount") : (locale === "th" ? "ยอดตั้งต้น" : "Original amount")}</label><input id={`${kind}-total`} name="total" type="number" min="0.01" step="0.01" required placeholder="0.00" /></div>
-              {!isSavings ? <><div className="field"><label htmlFor="installment-total-months">{locale === "th" ? "จำนวนเดือนทั้งหมด" : "Total installment months"}</label><input id="installment-total-months" name="totalMonths" type="number" min="1" step="1" required placeholder="12" /></div><div className="field"><label htmlFor="installment-paid-months">{locale === "th" ? "ชำระแล้วกี่เดือน" : "Months already paid"}</label><input id="installment-paid-months" name="paidMonths" type="number" min="0" step="1" defaultValue="0" required /></div></> : null}
+              <div className="field full"><label htmlFor={`${kind}-name`}>{isSavings ? (locale === "th" ? "ชื่อเป้าหมาย" : "Goal name") : (locale === "th" ? "ชื่อยอดผ่อน" : "Installment name")}</label><input id={`${kind}-name`} name="name" type="text" required defaultValue={installment?.name} placeholder={isSavings ? "e.g. Emergency fund" : "e.g. Home renovation"} /></div>
+              <div className={cn("field", isSavings && "full")}><label htmlFor={`${kind}-total`}>{isSavings ? (locale === "th" ? "ยอดเป้าหมาย" : "Target amount") : (locale === "th" ? "ยอดตั้งต้น" : "Original amount")}</label><input id={`${kind}-total`} name="total" type="number" min="0.01" step="0.01" required defaultValue={installment?.total} placeholder="0.00" /></div>
+              {!isSavings ? <><div className="field"><label htmlFor="installment-total-months">{locale === "th" ? "จำนวนเดือนทั้งหมด" : "Total installment months"}</label><input id="installment-total-months" name="totalMonths" type="number" min="1" step="1" required defaultValue={installment?.totalMonths} placeholder="12" /></div><div className="field"><label htmlFor="installment-paid-months">{locale === "th" ? "ชำระแล้วกี่เดือน" : "Months already paid"}</label><input id="installment-paid-months" name="paidMonths" type="number" min="0" step="1" defaultValue={installment?.paidMonths ?? 0} required /></div></> : null}
               <div className={cn("field", isSavings && "full")}><label>{isSavings ? (locale === "th" ? "วันที่เป้าหมาย (ไม่บังคับ)" : "Target date (optional)") : (locale === "th" ? "วันครบกำหนดครั้งถัดไป" : "Next due date")}</label><CalendarDateField name="planDate" value={date} onChange={setDate} locale={locale} placeholder={isSavings ? (locale === "th" ? "ไม่ระบุวันที่" : "No target date") : (locale === "th" ? "เลือกวันครบกำหนด" : "Select due date")} clearable={isSavings} /></div>
             </div>
-            <div className="dialog-actions"><Dialog.Close asChild><button className="secondary-btn" type="button" disabled={submitting}>{copy[locale].cancel}</button></Dialog.Close><button className="primary-btn" type="submit" disabled={submitting}>{submitting ? (locale === "th" ? "กำลังบันทึก…" : "Saving…") : (isSavings ? (locale === "th" ? "เพิ่มเป้าหมาย" : "Add goal") : (locale === "th" ? "เพิ่มยอดผ่อน" : "Add installment"))}</button></div>
+            <div className="dialog-actions"><Dialog.Close asChild><button className="secondary-btn" type="button" disabled={submitting}>{copy[locale].cancel}</button></Dialog.Close><button className="primary-btn" type="submit" disabled={submitting}>{submitting ? (locale === "th" ? "กำลังบันทึก…" : "Saving…") : isSavings ? (locale === "th" ? "เพิ่มเป้าหมาย" : "Add goal") : editingInstallment ? (locale === "th" ? "บันทึกการแก้ไข" : "Save changes") : (locale === "th" ? "เพิ่มยอดผ่อน" : "Add installment")}</button></div>
           </form>
         </Dialog.Content>
       </Dialog.Portal>
@@ -1551,16 +1729,22 @@ function ConfirmDialog({ open, onOpenChange, locale, title, description, confirm
   );
 }
 
-function AddDialog({ open, onOpenChange, locale, view, onAdd, demoMode, financialCategories, savingsGoals, initialSavingsGoalId, onHouseholdChange }: { open: boolean; onOpenChange: (v: boolean) => void; locale: Locale; view: View; onAdd: (transaction: Transaction) => void | Promise<void>; demoMode: boolean; financialCategories: FinancialCategory[]; savingsGoals: SavingsGoal[]; initialSavingsGoalId?: string; onHouseholdChange: () => void | Promise<void> }) {
+function AddDialog({ open, onOpenChange, locale, view, transaction, onAdd, onUpdate, demoMode, financialCategories, savingsGoals, initialSavingsGoalId, onHouseholdChange }: { open: boolean; onOpenChange: (v: boolean) => void; locale: Locale; view: View; transaction?: Transaction; onAdd: (transaction: Transaction) => void | Promise<void>; onUpdate: (transaction: Transaction) => void | Promise<void>; demoMode: boolean; financialCategories: FinancialCategory[]; savingsGoals: SavingsGoal[]; initialSavingsGoalId?: string; onHouseholdChange: () => void | Promise<void> }) {
   const t = copy[locale];
   const { submitting, run } = useSubmissionGuard();
   const financeView = view === "overview" || view === "finances";
-  const [selectedCategory, setSelectedCategory] = useState(() => initialSavingsGoalId ? "Savings" : financialCategories.find((category) => !category.isSystem)?.name ?? financialCategories[0]?.name ?? "Other");
-  const [transactionType, setTransactionType] = useState<"expense" | "income">("expense");
-  const [selectedSavingsGoalId, setSelectedSavingsGoalId] = useState(initialSavingsGoalId ?? "");
+  const editing = Boolean(transaction);
+  const [selectedCategory, setSelectedCategory] = useState(() => transaction?.category ?? (initialSavingsGoalId ? "Savings" : financialCategories.find((category) => !category.isSystem)?.name ?? financialCategories[0]?.name ?? "Other"));
+  const [transactionType, setTransactionType] = useState<"expense" | "income">(() => transaction && transaction.amount > 0 ? "income" : "expense");
+  const [transactionDate, setTransactionDate] = useState(transaction?.date ?? todayInputValue);
+  const [selectedSavingsGoalId, setSelectedSavingsGoalId] = useState(initialSavingsGoalId ?? transaction?.savingsGoalId ?? "");
   const savingsTransfer = selectedCategory === "Savings";
   const savingsWithdrawal = savingsTransfer && transactionType === "income";
   const selectedSavingsGoal = savingsGoals.find((goal) => goal.id === selectedSavingsGoalId);
+  const editingSavingsContribution = transaction?.savingsGoalId === selectedSavingsGoalId
+    ? transaction.amount < 0 ? Math.abs(transaction.amount) : -transaction.amount
+    : 0;
+  const availableSavingsBalance = Math.max(0, (selectedSavingsGoal?.current ?? 0) - editingSavingsContribution);
 
   async function submit(formData: FormData) {
     const title = String(formData.get("title") || (view === "calendar" ? "New event" : view === "recipes" ? "New recipe" : "New transaction"));
@@ -1585,22 +1769,26 @@ function AddDialog({ open, onOpenChange, locale, view, onAdd, demoMode, financia
             toast.error(error.message);
             throw error;
           }
-          if (savingsWithdrawal && selectedSavingsGoal && amount > selectedSavingsGoal.current) {
-            const error = new Error(locale === "th" ? `ถอนได้สูงสุด ${formatMoney(selectedSavingsGoal.current)}` : `You can withdraw up to ${formatMoney(selectedSavingsGoal.current)}.`);
+          if (savingsWithdrawal && selectedSavingsGoal && amount > availableSavingsBalance) {
+            const error = new Error(locale === "th" ? `ถอนได้สูงสุด ${formatMoney(availableSavingsBalance)}` : `You can withdraw up to ${formatMoney(availableSavingsBalance)}.`);
             toast.error(error.message);
             throw error;
           }
-          await onAdd({
-            id: crypto.randomUUID(),
+          const nextTransaction = {
+            id: transaction?.id ?? crypto.randomUUID(),
             title,
             category: selectedCategory,
             date: String(formData.get("date") || todayInputValue()),
+            time: String(formData.get("time") || currentTimeInputValue()),
             amount: type === "income" ? amount : -amount,
             icon: savingsTransfer ? "piggy-bank" : type === "income" ? "wallet" : "basket",
             savingsGoalId,
-          });
+          } satisfies Transaction;
+          await (transaction ? onUpdate(nextTransaction) : onAdd(nextTransaction));
         }
-        toast.success(locale === "th" ? `เพิ่ม “${title}” แล้ว` : `“${title}” added`);
+        toast.success(editing
+          ? (locale === "th" ? `บันทึกการแก้ไข “${title}” แล้ว` : `“${title}” updated`)
+          : (locale === "th" ? `เพิ่ม “${title}” แล้ว` : `“${title}” added`));
         onOpenChange(false);
       });
     } catch {
@@ -1608,7 +1796,7 @@ function AddDialog({ open, onOpenChange, locale, view, onAdd, demoMode, financia
     }
   }
 
-  const description = view === "calendar" ? t.addEvent : view === "recipes" ? t.newRecipe : view === "household" ? t.invite : t.addTransaction;
+  const description = editing ? (locale === "th" ? "แก้ไขธุรกรรม" : "Edit transaction") : view === "calendar" ? t.addEvent : view === "recipes" ? t.newRecipe : view === "household" ? t.invite : t.addTransaction;
   return (
     <Dialog.Root open={open} onOpenChange={(nextOpen) => { if (!submitting) onOpenChange(nextOpen); }}>
       <Dialog.Portal>
@@ -1618,16 +1806,17 @@ function AddDialog({ open, onOpenChange, locale, view, onAdd, demoMode, financia
           <Dialog.Description className="dialog-description">{savingsTransfer ? savingsWithdrawal ? (locale === "th" ? "ถอนเงินออกจากสินทรัพย์เงินออมโดยไม่นับเป็นรายรับ" : "Withdraw from a savings asset without counting it as income.") : (locale === "th" ? "ฝากเงินเข้าสินทรัพย์เงินออมโดยไม่นับเป็นค่าใช้จ่าย" : "Deposit into a savings asset without counting it as an expense.") : (locale === "th" ? "รายละเอียดจะซิงก์ให้สมาชิกทุกคนทันที" : "Details will sync with everyone in your household.")}</Dialog.Description>
           <form action={submit}>
             <div className="field-grid">
-              <div className="field full"><label htmlFor="add-item-title">{view === "household" ? "Email" : t.title}</label><input id="add-item-title" name="title" type={view === "household" ? "email" : "text"} required autoComplete="off" placeholder={view === "household" ? "name@example.com" : savingsTransfer ? savingsWithdrawal ? (selectedSavingsGoal ? `e.g. Withdraw from ${selectedSavingsGoal.name}…` : "e.g. Savings withdrawal…") : (selectedSavingsGoal ? `e.g. Fund ${selectedSavingsGoal.name}…` : "e.g. Monthly savings…") : "e.g. Grocery shopping…"} /></div>
+              <div className="field full"><label htmlFor="add-item-title">{view === "household" ? "Email" : t.title}</label><input id="add-item-title" name="title" type={view === "household" ? "email" : "text"} required autoComplete="off" defaultValue={transaction?.title} placeholder={view === "household" ? "name@example.com" : savingsTransfer ? savingsWithdrawal ? (selectedSavingsGoal ? `e.g. Withdraw from ${selectedSavingsGoal.name}…` : "e.g. Savings withdrawal…") : (selectedSavingsGoal ? `e.g. Fund ${selectedSavingsGoal.name}…` : "e.g. Monthly savings…") : "e.g. Grocery shopping…"} /></div>
               {financeView ? <>
                 <div className="field"><label htmlFor="transaction-type">{savingsTransfer ? (locale === "th" ? "การทำรายการ" : "Action") : t.type}</label><select id="transaction-type" name="type" value={transactionType} onChange={(event) => setTransactionType(event.target.value as "expense" | "income")}>{savingsTransfer ? <><option value="expense">{locale === "th" ? "ฝากเงิน" : "Deposit"}</option><option value="income">{locale === "th" ? "ถอนเงิน" : "Withdraw"}</option></> : <><option value="expense">{t.expense}</option><option value="income">{t.income}</option></>}</select></div>
-                <div className="field"><label htmlFor="transaction-amount">{t.amount}</label><input id="transaction-amount" name="amount" type="number" min="0.01" max={savingsWithdrawal && selectedSavingsGoal ? selectedSavingsGoal.current : undefined} step="0.01" required inputMode="decimal" placeholder="0.00" />{savingsWithdrawal && selectedSavingsGoal ? <p className="field-help">{locale === "th" ? `ถอนได้ ${formatMoney(selectedSavingsGoal.current)}` : `${formatMoney(selectedSavingsGoal.current)} available`}</p> : null}</div>
-                <div className="field"><label htmlFor="transaction-category">{t.category}</label><select id="transaction-category" name="category" value={selectedCategory} onChange={(event) => { const nextCategory = event.target.value; setSelectedCategory(nextCategory); if (nextCategory === "Savings") setTransactionType("expense"); }}>{financialCategories.map((category) => <option key={category.id} value={category.name}>{locale === "th" ? category.nameTh || category.name : category.name}</option>)}</select></div>
-                <div className="field"><label htmlFor="transaction-date">{t.date}</label><input id="transaction-date" name="date" type="date" defaultValue={todayInputValue()} required /></div>
+                <div className="field"><label htmlFor="transaction-amount">{t.amount}</label><input id="transaction-amount" name="amount" type="number" min="0.01" max={savingsWithdrawal && selectedSavingsGoal ? availableSavingsBalance : undefined} step="0.01" required inputMode="decimal" defaultValue={transaction ? Math.abs(transaction.amount) : undefined} placeholder="0.00" />{savingsWithdrawal && selectedSavingsGoal ? <p className="field-help">{locale === "th" ? `ถอนได้ ${formatMoney(availableSavingsBalance)}` : `${formatMoney(availableSavingsBalance)} available`}</p> : null}</div>
+                <div className="field"><label htmlFor="transaction-category">{t.category}</label><select id="transaction-category" name="category" value={selectedCategory} onChange={(event) => { const nextCategory = event.target.value; setSelectedCategory(nextCategory); if (nextCategory === "Savings") setTransactionType("expense"); }}>{transaction && !financialCategories.some((category) => category.name === transaction.category) ? <option value={transaction.category}>{transaction.category} ({locale === "th" ? "เก็บถาวร" : "Archived"})</option> : null}{financialCategories.map((category) => <option key={category.id} value={category.name}>{locale === "th" ? category.nameTh || category.name : category.name}</option>)}</select></div>
+                <div className="field"><label>{t.date}</label><CalendarDateField name="date" value={transactionDate} onChange={setTransactionDate} locale={locale} placeholder={locale === "th" ? "เลือกวันที่" : "Select date"} /></div>
+                <div className="field"><label htmlFor="transaction-time">{locale === "th" ? "เวลา" : "Time"}</label><input id="transaction-time" name="time" type="time" defaultValue={transaction ? transactionTime(transaction) || currentTimeInputValue() : currentTimeInputValue()} required /></div>
                 {savingsTransfer ? <div className="field full"><label htmlFor="transaction-savings-goal">{locale === "th" ? "สินทรัพย์เงินออม" : "Savings asset"}</label><select id="transaction-savings-goal" name="savingsGoalId" value={selectedSavingsGoalId} onChange={(event) => setSelectedSavingsGoalId(event.target.value)} required><option value="" disabled>{locale === "th" ? "เลือกสินทรัพย์เงินออม" : "Select a savings asset"}</option>{savingsGoals.map((goal) => <option key={goal.id} value={goal.id}>{goal.name} · {formatMoney(goal.current)} / {formatMoney(goal.target)}</option>)}</select>{savingsGoals.length === 0 ? <p className="field-help">{locale === "th" ? "เพิ่มเป้าหมายเงินออมก่อนสร้างรายการนี้" : "Add a savings goal before creating this transaction."}</p> : null}</div> : null}
               </> : null}
             </div>
-            <div className="dialog-actions"><Dialog.Close asChild><button type="button" className="secondary-btn" disabled={submitting}>{t.cancel}</button></Dialog.Close><button className="primary-btn" type="submit" disabled={submitting}>{submitting ? (locale === "th" ? "กำลังบันทึก…" : view === "household" ? "Sending…" : "Saving…") : t.add}</button></div>
+            <div className="dialog-actions"><Dialog.Close asChild><button type="button" className="secondary-btn" disabled={submitting}>{t.cancel}</button></Dialog.Close><button className="primary-btn" type="submit" disabled={submitting}>{submitting ? (locale === "th" ? "กำลังบันทึก…" : view === "household" ? "Sending…" : "Saving…") : editing ? (locale === "th" ? "บันทึกการแก้ไข" : "Save changes") : t.add}</button></div>
           </form>
         </Dialog.Content>
       </Dialog.Portal>
@@ -1641,14 +1830,17 @@ export function SebastianApp({ demoMode = true, householdId, userId, initialProf
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingCalendarEvent, setEditingCalendarEvent] = useState<CalendarEvent>();
   const [editingRecipe, setEditingRecipe] = useState<Recipe>();
+  const [editingTransaction, setEditingTransaction] = useState<Transaction>();
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
+  const [editingFinancialCategory, setEditingFinancialCategory] = useState<FinancialCategory>();
   const [financePlanKind, setFinancePlanKind] = useState<"savings" | "installment">();
+  const [editingDebtInstallment, setEditingDebtInstallment] = useState<DebtInstallment>();
   const [savingsTransactionGoal, setSavingsTransactionGoal] = useState<SavingsGoal>();
   const [installmentActionDebt, setInstallmentActionDebt] = useState<DebtInstallment>();
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation>();
   const [transactions, setTransactions] = useState<Transaction[]>(demoMode ? [...seedTransactions] : (initialTransactions ?? []));
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>(demoMode ? [...seedCalendarEvents] : (initialCalendarEvents ?? []));
-  const [financialCategories, setFinancialCategories] = useState<FinancialCategory[]>(demoMode ? [...seedFinancialCategories] : (initialCategories ?? []));
+  const [financialCategories, setFinancialCategories] = useState<FinancialCategory[]>(demoMode ? seedFinancialCategories.map((category, sortOrder) => ({ ...category, sortOrder })) : (initialCategories ?? []));
   const [debtInstallments, setDebtInstallments] = useState<DebtInstallment[]>(demoMode ? [...debts] : (initialDebts ?? []));
   const [savingsGoals, setSavingsGoals] = useState<SavingsGoal[]>(demoMode ? [...seedSavingsGoals] : (initialSavings ?? []));
   const [recipeItems, setRecipeItems] = useState<Recipe[]>(demoMode ? [...seedRecipes] : (initialRecipes ?? []));
@@ -1675,15 +1867,17 @@ export function SebastianApp({ demoMode = true, householdId, userId, initialProf
   const notifyRealtimeChange = useCallback(async () => {
     if (!householdId) return;
     const supabase = createSupabaseClient();
-    const [{ data }, { data: eventRows }, { data: debtRows }, { data: savingsRows }, { data: recipeRows }] = await Promise.all([
-      supabase.from("transactions").select("id,title,type,amount,occurred_on,savings_goal_id,categories(name)").eq("household_id", householdId).order("occurred_on", { ascending: false }),
+    const [{ data }, { data: eventRows }, { data: categoryRows }, { data: debtRows }, { data: savingsRows }, { data: recipeRows }] = await Promise.all([
+      supabase.from("transactions").select("id,title,type,amount,occurred_on,occurred_at,savings_goal_id,categories(name)").eq("household_id", householdId).order("occurred_on", { ascending: false }).order("occurred_at", { ascending: false }),
       supabase.from("calendar_events").select("id,title,description,starts_at,recurrence_rule,item_type").eq("household_id", householdId).order("starts_at", { ascending: true }),
+      supabase.from("categories").select("id,name,name_th,color,is_system,sort_order").eq("household_id", householdId).is("deleted_at", null).order("sort_order", { ascending: true }).order("name", { ascending: true }),
       supabase.from("debt_installments").select("id,title,original_amount,remaining_amount,installment_amount,total_installments,paid_installments,due_day,next_due_date").eq("household_id", householdId).eq("status", "active").order("next_due_date", { ascending: true }),
       supabase.from("savings_goals").select("id,name,target_amount,current_amount,target_date").eq("household_id", householdId).order("target_date", { ascending: true }),
       supabase.from("recipes").select("id,title,title_th,description,image_path,prep_minutes,cook_minutes,servings,difficulty,tags,ingredients").eq("household_id", householdId).order("created_at", { ascending: false }),
     ]);
-    if (data) setTransactions(data.map(row => ({ id: row.id, title: row.title, category: relatedName(row.categories), date: row.occurred_on, amount: row.type === "income" ? Number(row.amount) : -Number(row.amount), icon: row.savings_goal_id ? "piggy-bank" : row.type === "income" ? "wallet" : "basket", savingsGoalId: row.savings_goal_id ?? undefined })));
+    if (data) setTransactions(data.map(row => ({ id: row.id, title: row.title, category: relatedName(row.categories), date: row.occurred_on, time: row.occurred_at?.slice(0, 5), amount: row.type === "income" ? Number(row.amount) : -Number(row.amount), icon: row.savings_goal_id ? "piggy-bank" : row.type === "income" ? "wallet" : "basket", savingsGoalId: row.savings_goal_id ?? undefined })));
     if (eventRows) setCalendarEvents(eventRows.map(calendarEventFromRow));
+    if (categoryRows) setFinancialCategories(categoryRows.map((category) => ({ id: category.id, name: category.name, nameTh: category.name_th ?? "", color: category.color, sortOrder: category.sort_order, isSystem: category.is_system })));
     if (debtRows) setDebtInstallments(debtRows.flatMap((debt) => debt.next_due_date ? [{ id: debt.id, name: debt.title, paid: Math.max(Number(debt.original_amount) - Number(debt.remaining_amount), 0), total: Number(debt.original_amount), installment: Number(debt.installment_amount), totalMonths: Number(debt.total_installments), paidMonths: Number(debt.paid_installments), dueDay: Number(debt.due_day), dueDate: debt.next_due_date }] : []));
     if (savingsRows) setSavingsGoals(savingsRows.map((goal) => ({ id: goal.id, name: goal.name, current: Number(goal.current_amount), target: Number(goal.target_amount), targetDate: goal.target_date ?? undefined })));
     if (recipeRows) setRecipeItems(recipeRows.map(recipeFromRow));
@@ -1735,9 +1929,74 @@ export function SebastianApp({ demoMode = true, householdId, userId, initialProf
     if (!householdId || !userId) throw new Error("Missing household session");
     const supabase = createSupabaseClient();
     const { data: category } = await supabase.from("categories").select("id").eq("household_id", householdId).eq("name", item.category).is("deleted_at", null).maybeSingle();
-    const { error } = await supabase.from("transactions").insert({ household_id: householdId, created_by: userId, type: item.amount > 0 ? "income" : "expense", amount: Math.abs(item.amount), title: item.title, category_id: category?.id ?? null, savings_goal_id: item.savingsGoalId ?? null, occurred_on: item.date });
+    const { error } = await supabase.from("transactions").insert({ household_id: householdId, created_by: userId, type: item.amount > 0 ? "income" : "expense", amount: Math.abs(item.amount), title: item.title, category_id: category?.id ?? null, savings_goal_id: item.savingsGoalId ?? null, occurred_on: item.date, occurred_at: item.time ?? currentTimeInputValue() });
     if (error) { toast.error(error.message); throw error; }
     await notifyRealtimeChange();
+  }
+
+  async function updateTransaction(item: Transaction) {
+    const previous = transactions.find((transaction) => transaction.id === item.id);
+    if (!previous) {
+      const error = new Error(locale === "th" ? "ไม่พบธุรกรรมนี้" : "This transaction could not be found.");
+      toast.error(error.message);
+      throw error;
+    }
+    const invalidSavingsGoal = savingsGoals.find((goal) => goal.current - savingsContribution(previous, goal.id) + savingsContribution(item, goal.id) < -0.001);
+    if (invalidSavingsGoal) {
+      const error = new Error(locale === "th" ? `แก้ไขรายการนี้ไม่ได้ เนื่องจากรายการถอนภายหลังขึ้นอยู่กับยอดใน “${invalidSavingsGoal.name}”` : `This change would leave “${invalidSavingsGoal.name}” below zero because later withdrawals depend on it.`);
+      toast.error(error.message);
+      throw error;
+    }
+    if (demoMode) {
+      setTransactions((current) => current.map((transaction) => transaction.id === item.id ? item : transaction));
+      setSavingsGoals((current) => current.map((goal) => ({
+        ...goal,
+        current: Math.max(0, goal.current - savingsContribution(previous, goal.id) + savingsContribution(item, goal.id)),
+      })));
+      return;
+    }
+    if (!householdId || !userId) throw new Error("Missing household session");
+    const supabase = createSupabaseClient();
+    const { data: category, error: categoryError } = await supabase.from("categories").select("id").eq("household_id", householdId).eq("name", item.category).maybeSingle();
+    if (categoryError) { toast.error(categoryError.message); throw categoryError; }
+    const { error } = await supabase
+      .from("transactions")
+      .update({
+        type: item.amount > 0 ? "income" : "expense",
+        amount: Math.abs(item.amount),
+        title: item.title,
+        category_id: category?.id ?? null,
+        savings_goal_id: item.savingsGoalId ?? null,
+        occurred_on: item.date,
+        occurred_at: item.time ?? currentTimeInputValue(),
+        updated_by: userId,
+      })
+      .eq("id", item.id)
+      .eq("household_id", householdId);
+    if (error) { toast.error(error.message); throw error; }
+    await notifyRealtimeChange();
+  }
+
+  async function deleteTransaction(transaction: Transaction) {
+    const invalidSavingsGoal = savingsGoals.find((goal) => goal.current - savingsContribution(transaction, goal.id) < -0.001);
+    if (invalidSavingsGoal) {
+      const error = new Error(locale === "th" ? `ลบรายการนี้ไม่ได้ เนื่องจากรายการถอนภายหลังขึ้นอยู่กับยอดใน “${invalidSavingsGoal.name}”` : `This transaction cannot be deleted because later withdrawals from “${invalidSavingsGoal.name}” depend on it.`);
+      toast.error(error.message);
+      throw error;
+    }
+    if (demoMode) {
+      setTransactions((current) => current.filter((item) => item.id !== transaction.id));
+      setSavingsGoals((current) => current.map((goal) => ({
+        ...goal,
+        current: Math.max(0, goal.current - savingsContribution(transaction, goal.id)),
+      })));
+    } else {
+      if (!householdId) throw new Error("Missing household session");
+      const { error } = await createSupabaseClient().from("transactions").delete().eq("id", transaction.id).eq("household_id", householdId);
+      if (error) { toast.error(error.message); throw error; }
+      await notifyRealtimeChange();
+    }
+    toast.success(locale === "th" ? `ลบ “${transaction.title}” แล้ว` : `“${transaction.title}” deleted`);
   }
 
   async function addCalendarEvent(event: CalendarEvent) {
@@ -1911,29 +2170,75 @@ export function SebastianApp({ demoMode = true, householdId, userId, initialProf
     toast.success(locale === "th" ? `ลบสูตร “${recipe.titleTh || recipe.title}” แล้ว` : `“${recipe.title}” deleted`);
   }
 
-  async function addFinancialCategory(category: { name: string; nameTh: string }) {
+  async function addFinancialCategory(category: { name: string; nameTh: string; color: string }) {
     if (financialCategories.some((item) => item.name.toLocaleLowerCase() === category.name.toLocaleLowerCase())) {
       const error = new Error("A category with this English name already exists");
       toast.error(error.message);
       throw error;
     }
-    const palette = ["#ff7b54", "#3a7d6f", "#e7b25b", "#8a78c2", "#4f8ec9", "#aeb7b4"];
-    const color = palette[financialCategories.length % palette.length];
+    const sortOrder = financialCategories.reduce((highest, item) => Math.max(highest, item.sortOrder ?? -1), -1) + 1;
     if (demoMode) {
-      setFinancialCategories((current) => [...current, { id: crypto.randomUUID(), ...category, color }]);
+      setFinancialCategories((current) => [...current, { id: crypto.randomUUID(), ...category, sortOrder }]);
       return;
     }
     if (!householdId) throw new Error("Missing household session");
     const { data, error } = await createSupabaseClient()
       .from("categories")
-      .upsert({ household_id: householdId, name: category.name, name_th: category.nameTh, color, deleted_at: null }, { onConflict: "household_id,name" })
-      .select("id,name,name_th,color")
+      .upsert({ household_id: householdId, name: category.name, name_th: category.nameTh, color: category.color, sort_order: sortOrder, deleted_at: null }, { onConflict: "household_id,name" })
+      .select("id,name,name_th,color,sort_order")
       .single();
     if (error) {
       toast.error(error.code === "23505" ? "A category with this English name already exists" : error.message);
       throw error;
     }
-    setFinancialCategories((current) => [...current, { id: data.id, name: data.name, nameTh: data.name_th ?? "", color: data.color }]);
+    setFinancialCategories((current) => [...current, { id: data.id, name: data.name, nameTh: data.name_th ?? "", color: data.color, sortOrder: data.sort_order }]);
+  }
+
+  async function updateFinancialCategory(category: FinancialCategory, fields: { name: string; nameTh: string; color: string }) {
+    if (financialCategories.some((item) => item.id !== category.id && item.name.toLocaleLowerCase() === fields.name.toLocaleLowerCase())) {
+      const error = new Error("A category with this English name already exists");
+      toast.error(error.message);
+      throw error;
+    }
+    const nextCategory = { ...category, ...fields };
+    if (!demoMode) {
+      if (!householdId) throw new Error("Missing household session");
+      const { data, error } = await createSupabaseClient()
+        .from("categories")
+        .update({ name: fields.name, name_th: fields.nameTh, color: fields.color })
+        .eq("id", category.id)
+        .eq("household_id", householdId)
+        .select("id,name,name_th,color,is_system")
+        .single();
+      if (error) {
+        toast.error(error.code === "23505" ? "A category with this English name already exists" : error.message);
+        throw error;
+      }
+      nextCategory.name = data.name;
+      nextCategory.nameTh = data.name_th ?? "";
+      nextCategory.color = data.color;
+      nextCategory.isSystem = data.is_system;
+    }
+    setFinancialCategories((current) => current.map((item) => item.id === category.id ? nextCategory : item));
+    if (category.name !== nextCategory.name) setTransactions((current) => current.map((transaction) => transaction.category === category.name ? { ...transaction, category: nextCategory.name } : transaction));
+  }
+
+  async function reorderFinancialCategories(orderedIds: string[]) {
+    const categoriesById = new Map(financialCategories.map((category) => [category.id, category]));
+    if (orderedIds.length !== financialCategories.length || new Set(orderedIds).size !== orderedIds.length || orderedIds.some((id) => !categoriesById.has(id))) {
+      const error = new Error(locale === "th" ? "รายการหมวดหมู่มีการเปลี่ยนแปลง กรุณาลองใหม่" : "The category list changed. Please try again.");
+      toast.error(error.message);
+      throw error;
+    }
+    if (!demoMode) {
+      if (!householdId) throw new Error("Missing household session");
+      const { error } = await createSupabaseClient().rpc("reorder_categories", { ordered_category_ids: orderedIds });
+      if (error) {
+        toast.error(error.message);
+        throw error;
+      }
+    }
+    setFinancialCategories(orderedIds.map((id, sortOrder) => ({ ...categoriesById.get(id)!, sortOrder })));
   }
 
   async function deleteFinancialCategory(category: FinancialCategory) {
@@ -1957,7 +2262,7 @@ export function SebastianApp({ demoMode = true, householdId, userId, initialProf
     setSavingsGoals((current) => [...current, { id: data.id, name: data.name, current: Number(data.current_amount), target: Number(data.target_amount), targetDate: data.target_date ?? undefined }]);
   }
 
-  async function addDebtInstallment(debt: { name: string; total: number; totalMonths: number; paidMonths: number; dueDate: string }) {
+  async function addDebtInstallment(debt: DebtInstallmentDraft) {
     const installment = Math.round((debt.total / debt.totalMonths) * 100) / 100;
     const paid = Math.min(debt.total, Math.round(installment * debt.paidMonths * 100) / 100);
     const dueDay = dateFromInputValue(debt.dueDate).getDate();
@@ -1973,6 +2278,47 @@ export function SebastianApp({ demoMode = true, householdId, userId, initialProf
     if (data.next_due_date) setDebtInstallments((current) => [...current, { id: data.id, name: data.title, paid: Math.max(Number(data.original_amount) - Number(data.remaining_amount), 0), total: Number(data.original_amount), installment: Number(data.installment_amount), totalMonths: Number(data.total_installments), paidMonths: Number(data.paid_installments), dueDay: Number(data.due_day), dueDate: data.next_due_date }]);
   }
 
+  async function updateDebtInstallment(debt: DebtInstallment, fields: DebtInstallmentDraft) {
+    const installment = Math.round((fields.total / fields.totalMonths) * 100) / 100;
+    const paid = Math.min(fields.total, Math.round(installment * fields.paidMonths * 100) / 100);
+    const dueDay = dateFromInputValue(fields.dueDate).getDate();
+    const nextDebt: DebtInstallment = { ...debt, ...fields, paid, installment, dueDay };
+    if (demoMode) {
+      setDebtInstallments((current) => current.map((item) => item.id === debt.id ? nextDebt : item));
+      return;
+    }
+    if (!householdId) throw new Error("Missing household session");
+    const { data, error } = await createSupabaseClient()
+      .from("debt_installments")
+      .update({
+        title: fields.name,
+        original_amount: fields.total,
+        remaining_amount: Math.max(fields.total - paid, 0),
+        installment_amount: installment,
+        total_installments: fields.totalMonths,
+        paid_installments: fields.paidMonths,
+        next_due_date: fields.dueDate,
+        due_day: dueDay,
+        status: "active",
+      })
+      .eq("id", debt.id)
+      .eq("household_id", householdId)
+      .select("id,title,original_amount,remaining_amount,installment_amount,total_installments,paid_installments,due_day,next_due_date")
+      .single();
+    if (error) { toast.error(error.message); throw error; }
+    if (data.next_due_date) setDebtInstallments((current) => current.map((item) => item.id === debt.id ? { id: data.id, name: data.title, paid: Math.max(Number(data.original_amount) - Number(data.remaining_amount), 0), total: Number(data.original_amount), installment: Number(data.installment_amount), totalMonths: Number(data.total_installments), paidMonths: Number(data.paid_installments), dueDay: Number(data.due_day), dueDate: data.next_due_date } : item));
+  }
+
+  async function deleteDebtInstallment(debt: DebtInstallment) {
+    if (!demoMode) {
+      if (!householdId) throw new Error("Missing household session");
+      const { error } = await createSupabaseClient().from("debt_installments").delete().eq("id", debt.id).eq("household_id", householdId);
+      if (error) { toast.error(error.message); throw error; }
+    }
+    setDebtInstallments((current) => current.filter((item) => item.id !== debt.id));
+    toast.success(locale === "th" ? `ลบยอดผ่อน “${debt.name}” แล้ว` : `Installment “${debt.name}” deleted`);
+  }
+
   async function recordInstallmentPayment(debt: DebtInstallment, paidOn: string) {
     const appliedAmount = debt.paidMonths + 1 >= debt.totalMonths ? debt.total - debt.paid : Math.min(debt.installment, debt.total - debt.paid);
     if (appliedAmount <= 0) return;
@@ -1981,7 +2327,7 @@ export function SebastianApp({ demoMode = true, householdId, userId, initialProf
       const nextPaidMonths = debt.paidMonths + 1;
       if (nextPaid >= debt.total || nextPaidMonths >= debt.totalMonths) setDebtInstallments((current) => current.filter((item) => item.id !== debt.id));
       else setDebtInstallments((current) => current.map((item) => item.id === debt.id ? { ...item, paid: nextPaid, paidMonths: nextPaidMonths, dueDate: nextMonthlyDate(item.dueDate, item.dueDay) } : item));
-      setTransactions((current) => [{ id: crypto.randomUUID(), title: `Installment: ${debt.name}`, category: "Other", date: paidOn, amount: -appliedAmount, icon: "credit-card" }, ...current]);
+      setTransactions((current) => [{ id: crypto.randomUUID(), title: `Installment: ${debt.name}`, category: "Other", date: paidOn, time: currentTimeInputValue(), amount: -appliedAmount, icon: "credit-card" }, ...current]);
     } else {
       const { error } = await createSupabaseClient().rpc("record_debt_payment", { target_debt: debt.id, paid_on: paidOn });
       if (error) { toast.error(error.message); throw error; }
@@ -2038,41 +2384,48 @@ export function SebastianApp({ demoMode = true, householdId, userId, initialProf
   }
 
   function openSavingsTransaction(goal: SavingsGoal) {
+    setEditingTransaction(undefined);
     setSavingsTransactionGoal(goal);
     setDialogOpen(true);
   }
 
   return <div className="app-shell">
     <aside className="sidebar"><div className="brand"><div className="brand-mark"><Sparkles size={18}/></div><div><div className="brand-name">Sebastian</div><div className="brand-kicker">Home, handled</div></div></div><div className="nav-label">Workspace</div><nav className="nav">{nav.map(item => { const Icon = navIcons[item]; return <button key={item} className={cn("nav-item", view === item && "active")} onClick={() => setView(item)}><Icon size={16}/>{t[item]}</button>; })}</nav><div className="sidebar-bottom">{demoMode && <div className="demo-note"><strong>{t.demo}</strong><span>{t.demoHint}</span></div>}<div className="profile"><Avatar.Root className="sidebar-avatar">{profile.avatarUrl ? <Avatar.Image className="profile-avatar-image" src={profile.avatarUrl} alt="" /> : null}<Avatar.Fallback className="avatar">{initials(profile.displayName || profile.email)}</Avatar.Fallback></Avatar.Root><div className="profile-copy"><strong>{profile.displayName}</strong><span>{profile.email}</span></div><DropdownMenu.Root><DropdownMenu.Trigger asChild><button className="icon-btn" style={{border:0, width:30, height:30}} aria-label={locale === "th" ? "เมนูโปรไฟล์" : "Profile menu"}><MoreHorizontal size={15}/></button></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="dropdown" sideOffset={6}><DropdownMenu.Item className="dropdown-item" onSelect={() => setView("settings")}><Settings size={13}/> {t.settings}</DropdownMenu.Item><DropdownMenu.Item className="dropdown-item" onSelect={() => setView("household")}><Users size={13}/> {t.household}</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root></div></div></aside>
-    <main className="main"><header className="topbar"><button className="mobile-profile-button" type="button" onClick={() => setView("settings")} aria-label={locale === "th" ? "เปิดโปรไฟล์" : "Open profile settings"}><Avatar.Root className="topbar-profile-avatar">{profile.avatarUrl ? <Avatar.Image className="profile-avatar-image" src={profile.avatarUrl} alt="" /> : null}<Avatar.Fallback className="topbar-profile-fallback">{initials(profile.displayName || profile.email)}</Avatar.Fallback></Avatar.Root><span>{profile.displayName}</span></button><div className="top-actions"><LanguageSwitcher locale={locale} onChange={setLocale}/><button className="icon-btn" aria-label="Toggle theme" onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}>{resolvedTheme === "dark" ? <Sun size={15}/> : <Moon size={15}/>}</button><button className="icon-btn" aria-label="Notifications"><Bell size={15}/></button></div></header><div className="content"><PageHeading locale={locale} view={view} profileName={profile.displayName} onAdd={() => { if (view === "calendar") openCalendarEditor(); else { setSavingsTransactionGoal(undefined); setEditingRecipe(undefined); setDialogOpen(true); } }}/>{view === "overview" && <Overview locale={locale} transactions={transactions} calendarEvents={calendarEvents} debtInstallments={debtInstallments} onNavigate={setView} onOpenCalendar={(date) => { setSelectedCalendarDate(date); setView("calendar"); }}/>} {view === "finances" && <Finances locale={locale} transactions={transactions} financialCategories={financialCategories} debtInstallments={debtInstallments} savingsGoals={savingsGoals} onAddCategory={() => setCategoryDialogOpen(true)} onDeleteCategory={(category) => setPendingConfirmation({ kind: "category", category })} onAddSavings={() => setFinancePlanKind("savings")} onAddSavingsTransaction={openSavingsTransaction} onAddInstallment={() => setFinancePlanKind("installment")} onRecordInstallment={setInstallmentActionDebt}/>} {view === "calendar" && <CalendarView locale={locale} events={calendarEvents} transactions={transactions} selectedDate={selectedCalendarDate} onSelectDate={setSelectedCalendarDate} onEdit={openCalendarEditor} onDelete={(event) => setPendingConfirmation({ kind: "calendar", event })}/>} {view === "recipes" && <RecipesView locale={locale} items={recipeItems} onEdit={(recipe) => { setEditingRecipe(recipe); setDialogOpen(true); }} onDelete={(recipe) => setPendingConfirmation({ kind: "recipe", recipe })}/>} {view === "household" && <HouseholdView locale={locale} members={householdMembers} invitations={householdInvitations} activities={householdActivities} onInvite={() => setDialogOpen(true)}/>} {view === "settings" && <SettingsView locale={locale} setLocale={setLocale} profile={profile} onUpdateProfile={updateProfileName}/>}</div></main>
+    <main className="main"><header className="topbar"><button className="mobile-profile-button" type="button" onClick={() => setView("settings")} aria-label={locale === "th" ? "เปิดโปรไฟล์" : "Open profile settings"}><Avatar.Root className="topbar-profile-avatar">{profile.avatarUrl ? <Avatar.Image className="profile-avatar-image" src={profile.avatarUrl} alt="" /> : null}<Avatar.Fallback className="topbar-profile-fallback">{initials(profile.displayName || profile.email)}</Avatar.Fallback></Avatar.Root><span>{profile.displayName}</span></button><div className="top-actions"><LanguageSwitcher locale={locale} onChange={setLocale}/><button className="icon-btn" aria-label="Toggle theme" onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}>{resolvedTheme === "dark" ? <Sun size={15}/> : <Moon size={15}/>}</button><button className="icon-btn" aria-label="Notifications"><Bell size={15}/></button></div></header><div className="content"><PageHeading locale={locale} view={view} profileName={profile.displayName} onAdd={() => { if (view === "calendar") openCalendarEditor(); else { setSavingsTransactionGoal(undefined); setEditingRecipe(undefined); setEditingTransaction(undefined); setDialogOpen(true); } }}/>{view === "overview" && <Overview locale={locale} transactions={transactions} calendarEvents={calendarEvents} debtInstallments={debtInstallments} onNavigate={setView} onOpenCalendar={(date) => { setSelectedCalendarDate(date); setView("calendar"); }}/>} {view === "finances" && <Finances locale={locale} transactions={transactions} financialCategories={financialCategories} debtInstallments={debtInstallments} savingsGoals={savingsGoals} onEditTransaction={(transaction) => { setSavingsTransactionGoal(undefined); setEditingTransaction(transaction); setDialogOpen(true); }} onDeleteTransaction={(transaction) => setPendingConfirmation({ kind: "transaction", transaction })} onAddCategory={() => { setEditingFinancialCategory(undefined); setCategoryDialogOpen(true); }} onEditCategory={(category) => { setEditingFinancialCategory(category); setCategoryDialogOpen(true); }} onDeleteCategory={(category) => setPendingConfirmation({ kind: "category", category })} onReorderCategories={reorderFinancialCategories} onAddSavings={() => setFinancePlanKind("savings")} onAddSavingsTransaction={openSavingsTransaction} onAddInstallment={() => { setEditingDebtInstallment(undefined); setFinancePlanKind("installment"); }} onEditInstallment={(debt) => { setEditingDebtInstallment(debt); setFinancePlanKind("installment"); }} onDeleteInstallment={(debt) => setPendingConfirmation({ kind: "debt", debt })} onRecordInstallment={setInstallmentActionDebt}/>} {view === "calendar" && <CalendarView locale={locale} events={calendarEvents} transactions={transactions} selectedDate={selectedCalendarDate} onSelectDate={setSelectedCalendarDate} onEdit={openCalendarEditor} onDelete={(event) => setPendingConfirmation({ kind: "calendar", event })}/>} {view === "recipes" && <RecipesView locale={locale} items={recipeItems} onEdit={(recipe) => { setEditingRecipe(recipe); setDialogOpen(true); }} onDelete={(recipe) => setPendingConfirmation({ kind: "recipe", recipe })}/>} {view === "household" && <HouseholdView locale={locale} members={householdMembers} invitations={householdInvitations} activities={householdActivities} onInvite={() => setDialogOpen(true)}/>} {view === "settings" && <SettingsView locale={locale} setLocale={setLocale} profile={profile} onUpdateProfile={updateProfileName}/>}</div></main>
     <nav className="mobile-nav">{nav.slice(0,5).map(item => { const Icon = navIcons[item]; return <button key={item} className={view === item ? "active" : ""} onClick={() => setView(item)}><Icon size={18}/><span>{t[item]}</span></button>; })}</nav>
     {view === "calendar" ? (
       <CalendarEventDialog key={editingCalendarEvent?.id ?? `new-${selectedCalendarDate}`} open={dialogOpen} onOpenChange={setDialogOpen} locale={locale} defaultDate={selectedCalendarDate} event={editingCalendarEvent} onSave={editingCalendarEvent ? updateCalendarEvent : addCalendarEvent} />
     ) : view === "recipes" ? (
       <RecipeDialog key={editingRecipe?.id ?? `new-recipe-${dialogOpen}`} open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) setEditingRecipe(undefined); }} locale={locale} recipe={editingRecipe} onSave={editingRecipe ? (recipe) => updateRecipe(editingRecipe, recipe) : addRecipe} />
     ) : (
-      <AddDialog key={savingsTransactionGoal?.id ?? `add-${view}`} open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) setSavingsTransactionGoal(undefined); }} locale={locale} view={view} onAdd={addTransaction} demoMode={demoMode} financialCategories={financialCategories} savingsGoals={savingsGoals} initialSavingsGoalId={savingsTransactionGoal?.id} onHouseholdChange={refreshHouseholdData}/>
+      <AddDialog key={editingTransaction?.id ?? savingsTransactionGoal?.id ?? `add-${view}`} open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) { setSavingsTransactionGoal(undefined); setEditingTransaction(undefined); } }} locale={locale} view={view} transaction={editingTransaction} onAdd={addTransaction} onUpdate={updateTransaction} demoMode={demoMode} financialCategories={financialCategories} savingsGoals={savingsGoals} initialSavingsGoalId={savingsTransactionGoal?.id} onHouseholdChange={refreshHouseholdData}/>
     )}
-    <CategoryDialog open={categoryDialogOpen} onOpenChange={setCategoryDialogOpen} locale={locale} onAdd={addFinancialCategory} />
-    {financePlanKind ? <FinancePlanDialog key={financePlanKind} open onOpenChange={(open) => { if (!open) setFinancePlanKind(undefined); }} locale={locale} kind={financePlanKind} onAddSavings={addSavingsGoal} onAddInstallment={addDebtInstallment} /> : null}
+    <CategoryDialog key={editingFinancialCategory?.id ?? "new-category"} open={categoryDialogOpen} onOpenChange={(open) => { setCategoryDialogOpen(open); if (!open) setEditingFinancialCategory(undefined); }} locale={locale} category={editingFinancialCategory} onSave={(fields) => editingFinancialCategory ? updateFinancialCategory(editingFinancialCategory, fields) : addFinancialCategory(fields)} />
+    {financePlanKind ? <FinancePlanDialog key={editingDebtInstallment?.id ?? financePlanKind} open onOpenChange={(open) => { if (!open) { setFinancePlanKind(undefined); setEditingDebtInstallment(undefined); } }} locale={locale} kind={financePlanKind} installment={editingDebtInstallment} onAddSavings={addSavingsGoal} onAddInstallment={addDebtInstallment} onUpdateInstallment={updateDebtInstallment} /> : null}
     <FinanceAmountDialog key={installmentActionDebt?.id ?? "finance-action"} open={Boolean(installmentActionDebt)} onOpenChange={(open) => { if (!open) setInstallmentActionDebt(undefined); }} locale={locale} debt={installmentActionDebt} onRecordPayment={recordInstallmentPayment} />
     <ConfirmDialog
       open={Boolean(pendingConfirmation)}
       onOpenChange={(open) => { if (!open) setPendingConfirmation(undefined); }}
       locale={locale}
-      title={pendingConfirmation?.kind === "category" ? (locale === "th" ? "นำหมวดหมู่นี้ออกหรือไม่" : "Remove this category?") : pendingConfirmation?.kind === "recipe" ? (locale === "th" ? "ลบสูตรนี้หรือไม่" : "Delete this recipe?") : (locale === "th" ? "ลบกิจกรรมนี้หรือไม่" : "Delete this event?")}
+      title={pendingConfirmation?.kind === "category" ? (locale === "th" ? "นำหมวดหมู่นี้ออกหรือไม่" : "Remove this category?") : pendingConfirmation?.kind === "debt" ? (locale === "th" ? "ลบยอดผ่อนนี้หรือไม่" : "Delete this installment?") : pendingConfirmation?.kind === "transaction" ? (locale === "th" ? "ลบธุรกรรมนี้หรือไม่" : "Delete this transaction?") : pendingConfirmation?.kind === "recipe" ? (locale === "th" ? "ลบสูตรนี้หรือไม่" : "Delete this recipe?") : (locale === "th" ? "ลบกิจกรรมนี้หรือไม่" : "Delete this event?")}
       description={pendingConfirmation?.kind === "category"
         ? (locale === "th" ? `หมวดหมู่ “${pendingConfirmation.category.nameTh || pendingConfirmation.category.name}” จะไม่แสดงในรายการใหม่ แต่ธุรกรรมเดิมจะยังคงอยู่` : `“${pendingConfirmation.category.name}” will no longer be available for new transactions. Existing transactions will keep this category.`)
         : pendingConfirmation?.kind === "calendar"
           ? (locale === "th" ? `กิจกรรม “${pendingConfirmation.event.title}”${pendingConfirmation.event.repeat !== "none" ? " และรายการที่เกิดซ้ำทั้งหมด" : ""} จะถูกลบอย่างถาวร` : `“${pendingConfirmation.event.title}”${pendingConfirmation.event.repeat !== "none" ? " and its recurring series" : ""} will be permanently deleted.`)
+          : pendingConfirmation?.kind === "debt"
+            ? (locale === "th" ? `ยอดผ่อน “${pendingConfirmation.debt.name}” จะถูกลบ แต่ธุรกรรมการชำระเดิมจะยังคงอยู่` : `“${pendingConfirmation.debt.name}” will be deleted. Existing payment transactions will remain.`)
+          : pendingConfirmation?.kind === "transaction"
+            ? (locale === "th" ? `ธุรกรรม “${pendingConfirmation.transaction.title}” จะถูกลบอย่างถาวร` : `“${pendingConfirmation.transaction.title}” will be permanently deleted.`)
           : pendingConfirmation?.kind === "recipe"
             ? (locale === "th" ? `สูตร “${pendingConfirmation.recipe.titleTh || pendingConfirmation.recipe.title}” และรูปภาพที่อัปโหลดจะถูกลบอย่างถาวร` : `“${pendingConfirmation.recipe.title}” and its uploaded image will be permanently deleted.`)
           : ""}
-      confirmLabel={pendingConfirmation?.kind === "category" ? (locale === "th" ? "นำหมวดหมู่ออก" : "Remove category") : pendingConfirmation?.kind === "recipe" ? (locale === "th" ? "ลบสูตร" : "Delete recipe") : (locale === "th" ? "ลบกิจกรรม" : "Delete event")}
+      confirmLabel={pendingConfirmation?.kind === "category" ? (locale === "th" ? "นำหมวดหมู่ออก" : "Remove category") : pendingConfirmation?.kind === "debt" ? (locale === "th" ? "ลบยอดผ่อน" : "Delete installment") : pendingConfirmation?.kind === "transaction" ? (locale === "th" ? "ลบธุรกรรม" : "Delete transaction") : pendingConfirmation?.kind === "recipe" ? (locale === "th" ? "ลบสูตร" : "Delete recipe") : (locale === "th" ? "ลบกิจกรรม" : "Delete event")}
       pendingLabel={pendingConfirmation?.kind === "category" ? (locale === "th" ? "กำลังนำออก…" : "Removing…") : (locale === "th" ? "กำลังลบ…" : "Deleting…")}
       onConfirm={async () => {
         if (pendingConfirmation?.kind === "category") await deleteFinancialCategory(pendingConfirmation.category);
         if (pendingConfirmation?.kind === "calendar") await deleteCalendarEvent(pendingConfirmation.event);
+        if (pendingConfirmation?.kind === "debt") await deleteDebtInstallment(pendingConfirmation.debt);
+        if (pendingConfirmation?.kind === "transaction") await deleteTransaction(pendingConfirmation.transaction);
         if (pendingConfirmation?.kind === "recipe") await deleteRecipe(pendingConfirmation.recipe);
       }}
     />

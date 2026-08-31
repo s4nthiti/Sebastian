@@ -31,9 +31,10 @@ export default async function HomePage() {
       .maybeSingle(),
     supabase
       .from("transactions")
-      .select("id,title,type,amount,occurred_on,savings_goal_id,categories(name)")
+      .select("id,title,type,amount,occurred_on,occurred_at,savings_goal_id,categories(name)")
       .eq("household_id", membership.household_id)
-      .order("occurred_on", { ascending: false }),
+      .order("occurred_on", { ascending: false })
+      .order("occurred_at", { ascending: false }),
     supabase
       .from("calendar_events")
       .select("id,title,description,starts_at,recurrence_rule,item_type")
@@ -41,9 +42,10 @@ export default async function HomePage() {
       .order("starts_at", { ascending: true }),
     supabase
       .from("categories")
-      .select("id,name,name_th,color,is_system")
+      .select("id,name,name_th,color,is_system,sort_order")
       .eq("household_id", membership.household_id)
       .is("deleted_at", null)
+      .order("sort_order", { ascending: true })
       .order("name", { ascending: true }),
     supabase
       .from("debt_installments")
@@ -85,6 +87,7 @@ export default async function HomePage() {
     title: row.title,
     category: relatedName(row.categories),
     date: row.occurred_on,
+    time: row.occurred_at?.slice(0, 5),
     amount: row.type === "income" ? Number(row.amount) : -Number(row.amount),
     icon: row.savings_goal_id ? "piggy-bank" : row.type === "income" ? "wallet" : "basket",
     savingsGoalId: row.savings_goal_id ?? undefined,
@@ -95,6 +98,7 @@ export default async function HomePage() {
     name: category.name,
     nameTh: category.name_th ?? "",
     color: category.color,
+    sortOrder: category.sort_order,
     isSystem: category.is_system,
   }));
   const initialDebts = (debtRows ?? []).flatMap((debt) => debt.next_due_date ? [{
